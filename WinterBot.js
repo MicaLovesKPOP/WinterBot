@@ -5,7 +5,7 @@ const client = new Discord.Client({ intents: Discord.GatewayIntentBits.Guilds })
 const fs = require('fs').promises;
 
 const guildId = '199916140183420928'; // Official Crashday discord
-const channelId = '387322956776210434'; // #cdl-staff channel
+const channelId = '1113151362507755531'; // #reg-tracking channel
 const logChannelId = '332575578383187970'; // #bot-logs channel
 
 let eventMessages = {};
