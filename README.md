@@ -91,7 +91,7 @@ If you'd to use the same picture of her as the bot's avatar, you can find it bel
 
 ## Acknowledgements
 
-- This project uses code and text generated with the help of [Bing Chat]([https://discordbothosting.com/](https://www.bing.com/search?q=Bing+AI&showconv=1)) and [ChatGPT](https://chat.openai.com/)
+- This project uses code and text generated with the help of [Bing Chat](https://www.bing.com/search?q=Bing+AI&showconv=1) and [ChatGPT](https://chat.openai.com/)
 <!---
 ## License
 
