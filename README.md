@@ -11,6 +11,12 @@ This is a Discord bot built with Node.js and the Discord.js library. The bot is 
 - Saves and loads event data to/from .json file
 - Posts weekly error reports to a specified channel (v1.0c+)
 
+## Preview
+
+![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
+
+The screenshot above shows how WinterBot keeps track of the registration order.
+
 ## Local Hosting
 
 ### Installation
@@ -52,15 +58,9 @@ If you are looking for a hosting solution for this bot, I can recommend using [d
 1. Go to the `CONSOLE` tab and click `START` to start the bot
 2. The bot will log in to Discord and start running
 
+<!---
 ## Screenshots
 
-Here is a screenshot of WinterBot in action:
-
-![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
-
-The screenshot shows WinterBot displaying registered users in order of registration.
-
-<!---
 Here are some screenshots of WinterBot in action:
 
 ### Event Message
@@ -81,7 +81,6 @@ This is a screenshot of the weekly error report posted by WinterBot:
 
 ![Weekly Error Report Screenshot](weekly-error-report-screenshot.png)
 -->
-
 ## Acknowledgements
 
 - This project uses code and text generated with the help of [Bing Chat]([https://discordbothosting.com/](https://www.bing.com/search?q=Bing+AI&showconv=1)) and [ChatGPT](https://chat.openai.com/)
