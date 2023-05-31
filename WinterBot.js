@@ -2,14 +2,18 @@ require('dotenv').config();
 
 const Discord = require('discord.js');
 const client = new Discord.Client({ intents: Discord.GatewayIntentBits.Guilds });
-const fs = require('fs').promises;
+const fs = require('fs');
+const errorLogStream = fs.createWriteStream('error.log', { flags: 'a' });
 
+const botVersion = '1.0c'; // Current bot version
 const guildId = '199916140183420928'; // Official Crashday discord
 const channelId = '1113151362507755531'; // #reg-tracking channel
 const logChannelId = '332575578383187970'; // #bot-logs channel
 
 let eventMessages = {};
 let eventData = {};
+let previousUptime = 0;
+let totalDowntime = 0;
 
 function getTimestamp() {
     const now = new Date();
@@ -36,7 +40,7 @@ async function saveData() {
         });
 
         const data = JSON.stringify({ eventData }, null, 2);
-        await fs.writeFile('data.json', data);
+        await fs.promises.writeFile('data.json', data);
 
         // Convert subscribedUsers and unsubscribedUsers arrays back to objects
         Object.values(eventData).forEach(event => {
@@ -51,12 +55,13 @@ async function saveData() {
         console.log(`[${getTimestamp()}] Data saved successfully.`);
     } catch (error) {
         console.error(`[${getTimestamp()}] Handled Error saving data: ${error}`);
+        errorLogStream.write(`[${getTimestamp()}] Handled Error saving data: ${error}\n`);
     }
 }
 
 async function loadData() {
     try {
-        const data = JSON.parse(await fs.readFile('data.json'));
+        const data = JSON.parse(await fs.promises.readFile('data.json'));
 
         // Load eventData from data.json
         eventData = data.eventData || {};
@@ -77,6 +82,7 @@ async function loadData() {
         console.log(`[${getTimestamp()}] Data loaded successfully.`);
     } catch (error) {
         console.error(`[${getTimestamp()}] Handled Error loading data: ${error}`);
+        errorLogStream.write(`[${getTimestamp()}] Handled Error loading data: ${error}\n`);
     }
 }
 
@@ -100,6 +106,7 @@ async function fetchSubscribedUsers(guildId, eventId) {
         }
     } catch (error) {
         console.error(`[${getTimestamp()}] Error fetching subscribed users: ${error}`);
+        errorLogStream.write(`[${getTimestamp()}] Error fetching subscribed users: ${error}\n`);
         return [];
     }
 }
@@ -145,6 +152,7 @@ async function updateEventMessages() {
                     await message.edit(content);
                 } catch (error) {
                     console.error(`[${getTimestamp()}] Error updating message: ${error}`);
+					errorLogStream.write(`[${getTimestamp()}] Error updating message: ${error}\n`);
                 }
             } else if (eventMessages[eventId]) {
                 // Update existing message
@@ -177,6 +185,7 @@ async function updateEventMessages() {
                     usernames = users.map(user => user.user.username);
                 } else {
                     console.error(`[${getTimestamp()}] Error: users is not an array: ${JSON.stringify(users)}`);
+					errorLogStream.write(`[${getTimestamp()}] Error: users is not an array: ${JSON.stringify(users)}\n`);
                 }
 
                 // Initialize the eventData[eventId] object if it does not exist
@@ -267,6 +276,7 @@ async function updateEventMessages() {
                         await message.edit(content);
                     } catch (error) {
                         console.error(`[${getTimestamp()}] Handled Error updating message: ${error}`);
+						errorLogStream.write(`[${getTimestamp()}] Handled Error updating message: ${error}\n`);
                         // Create new message
                         const channel = client.channels.cache.get(channelId);
                         const message = await channel.send(content);
@@ -293,15 +303,45 @@ async function updateEventMessages() {
         console.log(`[${getTimestamp()}] Update completed.`);
     } catch (error) {
         console.error(`[${getTimestamp()}] Handled Error in updateEventMessages: ${error}`);
+		errorLogStream.write(`[${getTimestamp()}] Handled Error in updateEventMessages: ${error}\n`);
     } finally {
         // Call updateEventMessages again after a delay
         setTimeout(updateEventMessages, Object.keys(eventData).length > 0 ? 500 : 30000); // 500ms extra delay to avoid rate limiting with fewer events present
     }
 }
 
+async function postErrorLog() {
+    try {
+        // Read the contents of the error log file
+        const errorLog = await fs.promises.readFile('error.log', 'utf8');
+
+        // Calculate the current uptime and total uptime
+        const currentUptime = Math.floor(client.uptime / (24 * 60 * 60 * 1000));
+        const totalUptime = currentUptime + previousUptime;
+
+        // Update the total downtime
+        totalDowntime += Math.max(0, 7 - currentUptime);
+
+        // Send the contents of the error log file to the Discord channel
+        const channel = client.channels.cache.get(logChannelId);
+        await channel.send(`Current uptime: ${currentUptime} days\nTotal uptime: ${totalUptime} days\nTotal downtime: ${totalDowntime} days\n\nWeekly error report:\n${errorLog}`);
+
+        // Clear the error log file
+        await fs.promises.writeFile('error.log', '');
+
+        // Update the previous uptime
+        previousUptime = totalUptime;
+    } catch (error) {
+        console.error(`[${getTimestamp()}] Error posting error log: ${error}`);
+		errorLogStream.write(`[${getTimestamp()}] Error posting error log: ${error}\n`);
+    }
+}
+
 // Event: Bot is ready
 client.on('ready', async () => {
-    console.log(`[${getTimestamp()}] Logged in as ${client.user.tag}!`);
+    console.log(`[${getTimestamp()}] Logged in as ${client.user.tag} v${botVersion}!`);
+	const channel = client.channels.cache.get(logChannelId);
+    channel.send(`[${getTimestamp()}] ${client.user} v${botVersion} is now online!`);
 
     // Load event data and update event messages
     await loadData();
@@ -313,6 +353,7 @@ process.on('unhandledRejection', error => {
     console.error(`[${getTimestamp()}] Unhandled promise rejection:`, error);
     const channel = client.channels.cache.get(logChannelId);
     channel.send(`[${getTimestamp()}] Unhandled promise rejection: ${error}`);
+	errorLogStream.write(`[${getTimestamp()}] ${error}\n`);
 });
 
 // Log uncaught exceptions
@@ -320,7 +361,11 @@ process.on('uncaughtException', error => {
     console.error(`[${getTimestamp()}] Uncaught exception:`, error);
     const channel = client.channels.cache.get(logChannelId);
     channel.send(`[${getTimestamp()}] Uncaught exception: ${error}`);
+	errorLogStream.write(`[${getTimestamp()}] ${error}\n`);
 });
 
 // Log in to the Discord bot
 client.login(process.env.BOT_TOKEN);
+
+// Call postErrorLog every 7 days (in milliseconds)
+setInterval(postErrorLog, 7 * 24 * 60 * 60 * 1000);
