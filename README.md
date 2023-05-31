@@ -85,7 +85,7 @@ This is a screenshot of the weekly error report posted by WinterBot:
 
 WinterBot is named after my cat, Winter.
 
-If you'd to use the same picture of her as the bot's avatar, you can find it below.
+If you'd like to use the same picture of her as the bot's avatar, you can find it below.
 
 <img src="https://i.imgur.com/oCS021f.png" alt="Cute Cat" width="192" height="192">
 
