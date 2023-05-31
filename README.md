@@ -17,8 +17,6 @@ The screenshot below shows how WinterBot keeps track of the registration order.
 
 ![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
 
-Winter is my cat. If you'd to use the same picture of Winter as the bot's avatar, you can find it [here](https://i.imgur.com/oCS021f.png).
-
 ## Local Hosting
 
 ### Installation
@@ -83,10 +81,19 @@ This is a screenshot of the weekly error report posted by WinterBot:
 
 ![Weekly Error Report Screenshot](weekly-error-report-screenshot.png)
 -->
+## Miscellaneous
+
+WinterBot is named after my cat, Winter.
+
+If you'd to use the same picture of her as the bot's avatar, you can find it below.
+
+<img src="https://i.imgur.com/oCS021f.png" alt="Cute Cat" width="192" height="192">
+
 ## Acknowledgements
 
 - This project uses code and text generated with the help of [Bing Chat]([https://discordbothosting.com/](https://www.bing.com/search?q=Bing+AI&showconv=1)) and [ChatGPT](https://chat.openai.com/)
-
+<!---
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+-->
