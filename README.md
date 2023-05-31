@@ -44,7 +44,9 @@ Replace `YOUR_BOT_TOKEN_HERE` with your bot's token.
 
 ## Cloud Hosting
 
-If you are looking for a hosting solution for this bot, I can recommend using [discordbothosting.com](https://discordbothosting.com/). Their €0,60/m tier is a perfect fit for this bot.
+If you are looking for a hosting solution for this bot, I can recommend using [discordbothosting.com](https://discordbothosting.com/).
+
+Their €0,60/m tier is a perfect fit for this bot.
 
 ### Configuration
 
