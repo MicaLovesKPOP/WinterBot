@@ -17,6 +17,8 @@ The screenshot below shows how WinterBot keeps track of the registration order.
 
 ![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
 
+Winter is my cat. If you'd to use the same picture of Winter as the bot's avatar, you can find it [here](https://i.imgur.com/oCS021f.png).
+
 ## Local Hosting
 
 ### Installation
