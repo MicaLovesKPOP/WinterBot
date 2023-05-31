@@ -13,9 +13,9 @@ This is a Discord bot built with Node.js and the Discord.js library. The bot is 
 
 ## Preview
 
-![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
+The screenshot below shows how WinterBot keeps track of the registration order.
 
-The screenshot above shows how WinterBot keeps track of the registration order.
+![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
 
 ## Local Hosting
 
