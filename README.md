@@ -2,6 +2,15 @@
 
 This is a Discord bot built with Node.js and the Discord.js library. The bot is designed to track the order of user registrations for scheduled events on a Discord server. It fetches scheduled events from the server, posts an event message for each event, and then keeps each message up to date with newly registered and unregistered users.
 
+## Table of Contents
+- [Features](#features)
+- [Local Hosting](#local-hosting)
+- [Cloud Hosting](#cloud-hosting)
+- [Miscellaneous](#miscellaneous)
+- [Acknowledgements](#acknowledgements)
+- [Licenses](#license)
+
+
 ## Features
 
 - Posts scheduled event information to specified channel
@@ -10,10 +19,6 @@ This is a Discord bot built with Node.js and the Discord.js library. The bot is 
 - Logs errors to a specified log channel
 - Saves and loads event data to/from .json file
 - Posts weekly error reports to a specified channel (v1.0c+)
-
-## Preview
-
-The screenshot below shows how WinterBot keeps track of the registration order.
 
 ![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
 
@@ -93,7 +98,7 @@ If you'd like to use the same picture of her as the bot's avatar, you can find i
 
 ## Acknowledgements
 
-- This project uses code and text generated with the help of [Bing Chat](https://www.bing.com/search?q=Bing+AI&showconv=1) and [ChatGPT](https://chat.openai.com/)
+This project uses code and text generated with the help of [Bing Chat](https://www.bing.com/search?q=Bing+AI&showconv=1) and [ChatGPT](https://chat.openai.com/).
 
 ## License
 
