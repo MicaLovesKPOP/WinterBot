@@ -18,7 +18,7 @@ This is a Discord bot built with Node.js and the Discord.js library. The bot is 
 - Lists previously registed users
 - Logs errors to a specified log channel
 - Saves and loads event data to/from .json file
-- Posts weekly error reports to a specified channel (v1.0c+)
+- Posts weekly error reports to a specified channel (added in v1.0c)
 
 ![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
 
