@@ -55,10 +55,10 @@ Their €0,60/m tier is a perfect fit for this bot.
 
 ### Configuration
 
-1. Sign up for an account on [discordbothosting.com](https://discordbothosting.com/)
-2. Log in to your account and go to the `Files` tab
-3. Upload the bot's files to your account
-4. Go to the `Startup` tab and under `BOT JS FILE`, replace `index.js` with `WinterBot.js`
+1. Sign up for an account on [discordbothosting.com](https://discordbothosting.com/).
+2. Log in to your account and go to the `Files` tab.
+3. Upload the bot's files to your account.
+4. Go to the `Startup` tab and under `BOT JS FILE`, replace `index.js` with `WinterBot.js`.
 
 ### Usage
 
