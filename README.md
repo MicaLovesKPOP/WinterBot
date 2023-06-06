@@ -62,8 +62,8 @@ Their €0,60/m tier is a perfect fit for this bot.
 
 ### Usage
 
-1. Go to the `CONSOLE` tab and click `START` to start the bot
-2. The bot will log in to Discord and start running
+1. Go to the `CONSOLE` tab and click `START` to start the bot.
+2. The bot will log in to Discord and start running.
 
 <!---
 ## Screenshots
