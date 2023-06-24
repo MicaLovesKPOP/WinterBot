@@ -1,4 +1,5 @@
-# WinterBot
+# WinterBot [![Download](https://img.shields.io/badge/Download-Latest_Release-brightgreen)](https://github.com/MicaLovesKPOP/WinterBot/releases/latest)
+
 
 This is a Discord bot built with Node.js and the Discord.js library. The bot is designed to track the order of user registrations for scheduled events on a Discord server. It fetches scheduled events from the server, posts an event message for each event, and then keeps each message up to date with newly registered and unregistered users.
 
@@ -27,7 +28,7 @@ This is a Discord bot built with Node.js and the Discord.js library. The bot is 
 ### Installation
 
 1. Install [Node.js](https://nodejs.org/en/) on your system.
-2. Clone this repository or download the code as a zip file and extract it.
+2. Clone this repository or [download the latest release](https://github.com/MicaLovesKPOP/WinterBot/releases/latest) and extract it.
 3. Open a terminal or command prompt in the project directory and run `npm install` to install the required dependencies.
 
 ### Configuration
@@ -57,8 +58,9 @@ Their €0,60/m tier is a perfect fit for this bot.
 
 1. Sign up for an account on [discordbothosting.com](https://discordbothosting.com/).
 2. Log in to your account and go to the `Files` tab.
-3. Upload the bot's files to your account.
-4. Go to the `Startup` tab and under `BOT JS FILE`, replace `index.js` with `WinterBot.js`.
+3. [Download the latest WinterBot release](https://github.com/MicaLovesKPOP/WinterBot/releases/latest) and extract it.
+4. Upload the bot's files to your account.
+5. Go to the `Startup` tab and under `BOT JS FILE`, replace `index.js` with `WinterBot.js`.
 
 ### Usage
 
