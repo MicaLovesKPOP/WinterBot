@@ -2,7 +2,7 @@
 // Implements the REST call for retrieving scheduled event subscribers with
 // retry/backoff behavior identical to the legacy WinterBot.js implementation.
 
-const fetch = require('node-fetch');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { getConfig } = require('../config/index.js');
 const { getTimestamp, safeWriteError } = require('../logging/logger.js');
 

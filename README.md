@@ -54,12 +54,13 @@ WinterBot now uses a small set of focused modules so the bot remains easy to rea
 1. Create a `.env` file in the project directory with the following content:
 
 ```
-BOT_TOKEN=YOUR_BOT_TOKEN_HERE
+BOT_TOKEN=YOUR_BOT_TOKEN
+GUILD_ID=YOUR_GUILD_ID
+CHANNEL_ID=YOUR_EVENT_CHANNEL_ID
+LOG_CHANNEL_ID=YOUR_LOG_CHANNEL_ID
 ```
 
-Replace `YOUR_BOT_TOKEN_HERE` with your bot's token.
-
-2. Open `WinterBot.js` and update the values of `guildId`, `channelId`, and `logChannelId` to match your Discord server's IDs.
+Replace each placeholder with your bot token and the corresponding Discord guild/channel IDs. No code edits are required; the bot reads these values from `.env` at startup.
 
 ### Usage
 
