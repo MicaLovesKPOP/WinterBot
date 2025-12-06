@@ -5,6 +5,7 @@ This is a Discord bot built with Node.js and the Discord.js library. The bot is 
 
 ## Table of Contents
 - [Features](#features)
+- [Architecture Overview](#architecture-overview)
 - [Local Hosting](#local-hosting)
 - [Cloud Hosting](#cloud-hosting)
 - [Miscellaneous](#miscellaneous)
@@ -22,6 +23,23 @@ This is a Discord bot built with Node.js and the Discord.js library. The bot is 
 - Posts weekly error reports to a specified channel (added in v1.0c)
 
 ![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
+
+## Architecture Overview
+
+WinterBot now uses a small set of focused modules so the bot remains easy to reason about while preserving all legacy behavior:
+
+- **Configuration (`src/config`)** – Loads `.env`, validates all required IDs/tokens, and exposes a typed config object for the rest of the bot.
+- **Logging (`src/logging`)** – Handles timestamped file logging with rotation, console fallback, and Discord log-channel delivery with cooldown-aware summarization and message chunking.
+- **Persistence (`src/persistence`)** – `eventsStore` loads/saves scheduled event subscriber data; `uptimeStore` tracks uptime/downtime with atomic writes and gap reconciliation.
+- **Discord (`src/discord`)** – `client` builds and logs in the Discord client with global error hooks; `events` wires the ready lifecycle (startup messages, intervals, logger injection); `scheduledEvents` syncs Discord scheduled events to channel messages and persistence; `api` wraps REST calls for subscriber lists.
+- **Reporting (`src/reporting`)** – Posts weekly error/uptime summaries by reading recent log files and formatting chunked reports to the log channel.
+- **Versioning (`src/versioning`)** – Preserves the auto-incrementing `version.txt` logic based on source modification time.
+
+### How It Works
+1. **Entrypoint (`WinterBot.js`)** loads configuration and version info, sets up logging, persistence stores, and the Discord client.
+2. Once the client is ready, lifecycle handlers load persisted data, send the startup uptime summary, and start recurring tasks (uptime saves, weekly reports, scheduled event synchronization).
+3. The scheduled events synchronizer polls Discord for scheduled events, updates channel messages, and persists subscriber state; logging and reporting capture errors and uptime over time.
+4. Process-level error hooks save uptime data and route errors through the centralized logger to files and the configured Discord log channel.
 
 ## Local Hosting
 
