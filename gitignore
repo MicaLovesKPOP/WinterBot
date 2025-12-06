@@ -1,17 +1,26 @@
-# dependencies
-/node_modules
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json*
 
-# logs
-*.log
-
-# runtime data
-data.json
-
-# environment variables
+# Environment / secrets
 .env
 
-# local development files
-*.local
+# Logs
+logs/
+*.log
 
-#custom junk
-/old_junk
+# Auto-generated bot data
+uptimeData.json
+uptimeData.json.tmp
+data.json
+
+# Temporary files
+*.tmp
+*.bak
+_bkp/
+error.log
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
