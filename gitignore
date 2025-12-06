@@ -1,0 +1,17 @@
+# dependencies
+/node_modules
+
+# logs
+*.log
+
+# runtime data
+data.json
+
+# environment variables
+.env
+
+# local development files
+*.local
+
+#custom junk
+/old_junk
