@@ -1,127 +1,216 @@
-# WinterBot [![Download](https://img.shields.io/badge/Download-Latest_Release-brightgreen)](https://github.com/MicaLovesKPOP/WinterBot/releases/latest)
+# WinterBot
 
+WinterBot is a Discord bot for tracking scheduled-event registrations and enforcing optional per-channel message requirements.
 
-This is a Discord bot built with Node.js and the Discord.js library. The bot is designed to track the order of user registrations for scheduled events on a Discord server. It fetches scheduled events from the server, posts an event message for each event, and then keeps each message up to date with newly registered and unregistered users.
+## Highlights
 
-## Table of Contents
-- [Features](#features)
-- [Architecture Overview](#architecture-overview)
-- [Local Hosting](#local-hosting)
-- [Cloud Hosting](#cloud-hosting)
-- [Miscellaneous](#miscellaneous)
-- [Acknowledgements](#acknowledgements)
-- [Licenses](#license)
+- Tracks scheduled-event signups in registration order
+- Preserves registration state with atomic writes and rolling backups
+- Uses stable Discord user IDs internally
+- Displays names as nicknames, usernames, or both
+- Handles deregistration and later re-registration without corrupting signup order
+- Uses grace cycles before treating missing users or scheduled events as permanently removed
+- Enforces configurable media/link requirements per channel
+- Suppresses bot-generated mentions and escapes user-controlled Markdown
+- Posts daily error summaries and weekly health reports
+- Includes automated regression tests for the most failure-prone behavior
 
+## Runtime
 
-## Features
+WinterBot requires Node.js 18.20 or newer.
 
-- Posts scheduled event information to specified channel
-- Keeps track of registered users in order of registration
-- Lists previously registed users
-- Logs errors to a specified log channel
-- Saves and loads event data to/from .json file
-- Posts weekly error reports to a specified channel (added in v1.0c)
+Node.js 24 LTS is recommended for production. Older supported runtimes may still work, but using a currently maintained LTS release gives the bot current platform security fixes.
 
-![Event Message Screenshot](https://i.imgur.com/RMabYb4.png)
+## Configuration
 
-## Architecture Overview
+Create a `.env` file in the project root.
 
-WinterBot now uses a small set of focused modules so the bot remains easy to reason about while preserving all legacy behavior:
-
-- **Configuration (`src/config`)** – Loads `.env`, validates all required IDs/tokens, and exposes a typed config object for the rest of the bot.
-- **Logging (`src/logging`)** – Handles timestamped file logging with rotation, console fallback, and Discord log-channel delivery with cooldown-aware summarization and message chunking.
-- **Persistence (`src/persistence`)** – `eventsStore` loads/saves scheduled event subscriber data; `uptimeStore` tracks uptime/downtime with atomic writes and gap reconciliation.
-- **Discord (`src/discord`)** – `client` builds and logs in the Discord client with global error hooks; `events` wires the ready lifecycle (startup messages, intervals, logger injection); `scheduledEvents` syncs Discord scheduled events to channel messages and persistence; `api` wraps REST calls for subscriber lists.
-- **Reporting (`src/reporting`)** – Posts weekly error/uptime summaries by reading recent log files and formatting chunked reports to the log channel.
-- **Versioning (`src/versioning`)** – Preserves the auto-incrementing `version.txt` logic based on source modification time.
-
-### How It Works
-1. **Entrypoint (`WinterBot.js`)** loads configuration and version info, sets up logging, persistence stores, and the Discord client.
-2. Once the client is ready, lifecycle handlers load persisted data, send the startup uptime summary, and start recurring tasks (uptime saves, weekly reports, scheduled event synchronization).
-3. The scheduled events synchronizer polls Discord for scheduled events, updates channel messages, and persists subscriber state; logging and reporting capture errors and uptime over time.
-4. Process-level error hooks save uptime data and route errors through the centralized logger to files and the configured Discord log channel.
-
-## Local Hosting
-
-### Installation
-
-1. Install [Node.js](https://nodejs.org/en/) on your system.
-2. Clone this repository or [download the latest release](https://github.com/MicaLovesKPOP/WinterBot/releases/latest) and extract it.
-3. Open a terminal or command prompt in the project directory and run `npm install` to install the required dependencies.
-
-### Configuration
-
-1. Create a `.env` file in the project directory with the following content:
-
-```
+```env
 BOT_TOKEN=YOUR_BOT_TOKEN
 GUILD_ID=YOUR_GUILD_ID
 CHANNEL_ID=YOUR_EVENT_CHANNEL_ID
 LOG_CHANNEL_ID=YOUR_LOG_CHANNEL_ID
+
+USER_NAME_DISPLAY_MODE=2
+
+EVENT_POLL_INTERVAL_MS=30000
+ACTIVE_EVENT_POLL_INTERVAL_MS=5000
+UPTIME_SAVE_INTERVAL_MS=60000
+WEEKLY_REPORT_INTERVAL_MS=604800000
+ERROR_SUMMARY_INTERVAL_MS=86400000
+
+UNSUBSCRIBE_GRACE_CYCLES=6
+MISSING_EVENT_GRACE_CYCLES=3
+
+MAX_API_RETRIES=4
+RETRY_BASE_DELAY_MS=1000
+API_REQUEST_TIMEOUT_MS=15000
+
+ERROR_REGISTRY_MAX_SIZE=500
+DEBUG_LOGGING=0
+
+MESSAGE_REQUIREMENTS_FILE=message-requirements.json
+MESSAGE_REQUIREMENTS_EMBED_GRACE_MS=4000
 ```
 
-Replace each placeholder with your bot token and the corresponding Discord guild/channel IDs. No code edits are required; the bot reads these values from `.env` at startup.
+Explicit invalid numeric settings fail fast instead of silently falling back.
 
-### Usage
+### Name display modes
 
-1. Open a terminal or command prompt in the project directory and run `node WinterBot.js` to start the bot.
-2. The bot will log in to Discord and start running.
+- `0` = nickname/display name only
+- `1` = username only
+- `2` = display name plus username when they differ
 
-## Cloud Hosting
+### Scheduled-event behavior
 
-If you are looking for a hosting solution for this bot, I can recommend using [discordbothosting.com](https://discordbothosting.com/).
+WinterBot polls Discord scheduled events and maintains one tracking message per event.
 
-Their €0,60/m tier is a perfect fit for this bot.
+Important reliability behavior:
 
-### Configuration
+- A subscriber must be absent for `UNSUBSCRIBE_GRACE_CYCLES` successful subscriber polls before being marked deregistered.
+- An event must be absent for `MISSING_EVENT_GRACE_CYCLES` successful event polls before being marked past and removed from active tracking.
+- Transient Discord errors do not cause WinterBot to create duplicate tracking messages.
+- If an event message grows too large for Discord, WinterBot keeps it within the content limit and shows an omission summary.
+- User-controlled names cannot create mentions through WinterBot messages.
 
-1. Sign up for an account on [discordbothosting.com](https://discordbothosting.com/).
-2. Log in to your account and go to the `Files` tab.
-3. [Download the latest WinterBot release](https://github.com/MicaLovesKPOP/WinterBot/releases/latest) and extract it.
-4. Upload the bot's files to your account.
-5. Go to the `Startup` tab and under `BOT JS FILE`, replace `index.js` with `WinterBot.js`.
+### Per-channel message requirements
 
-### Usage
+Copy `message-requirements.example.json` to `message-requirements.json` and configure rules by Discord channel ID.
 
-1. Go to the `CONSOLE` tab and click `START` to start the bot.
-2. The bot will log in to Discord and start running.
+The runtime file is ignored by Git so each server can have its own policy without modifying WinterBot source.
 
-<!---
-## Screenshots
+Each channel contains a `requirements` array. All requirements in that array must pass.
 
-Here are some screenshots of WinterBot in action:
+Supported requirement types:
 
-### Event Message
+- `mediaOnly` — requires image, video, or audio media. Captions are allowed, but non-media attachments and links that do not resolve to media are rejected.
+- `requiredLink` — requires one or more links matching configured domains, optional path prefixes, and optional query-parameter rules.
 
-This is a screenshot of an event message showing subscribed and unsubscribed users:
+Example:
 
-![Event Message Screenshot](event-message-screenshot.png)
+```json
+{
+  "123456789012345678": {
+    "requirements": [
+      {
+        "type": "mediaOnly"
+      }
+    ]
+  },
+  "234567890123456789": {
+    "requirements": [
+      {
+        "type": "requiredLink",
+        "domains": ["steamcommunity.com"],
+        "pathPrefixes": [
+          "/sharedfiles/filedetails",
+          "/workshop/filedetails"
+        ],
+        "queryParams": {
+          "id": "^\\d+$"
+        },
+        "minMatches": 1
+      }
+    ]
+  }
+}
+```
 
-### Error Log Channel
+`requiredLink` options:
 
-This is a screenshot of the error log channel showing error messages posted by WinterBot:
+- `domains` is required.
+- Subdomains are accepted by default; set `allowSubdomains` to `false` for exact-host matching.
+- `pathPrefixes` is optional. Prefixes are matched on path boundaries rather than arbitrary string prefixes.
+- `queryParams` is optional. Use `true` to require a parameter, or a regular-expression string to validate its value.
+- `minMatches` defaults to `1`.
+- `rejectOtherLinks` defaults to `false`. Set it to `true` if every link in the message must match.
+- `ignoreBots` is a per-channel policy option and defaults to `true`.
 
-![Error Log Channel Screenshot](error-log-channel-screenshot.png)
+The same JSON can be supplied through `MESSAGE_REQUIREMENTS_JSON`. Entries there override channels with the same ID from the file.
 
-### Weekly Error Report
+`MEDIA_ONLY_CHANNEL_IDS` remains supported as a backwards-compatible shorthand.
 
-This is a screenshot of the weekly error report posted by WinterBot:
+When at least one message-requirement channel is configured, enable **Message Content Intent** for WinterBot in the Discord Developer Portal.
 
-![Weekly Error Report Screenshot](weekly-error-report-screenshot.png)
--->
-## Miscellaneous
+WinterBot validates required guilds/channels and permissions on startup.
 
-WinterBot is named after my cat, Winter.
+## Persistence and recovery
 
-If you'd like to use the same picture of her as the bot's avatar, you can find it below.
+WinterBot persists:
 
-<img src="https://i.imgur.com/oCS021f.png" alt="Cute Cat" width="192" height="192">
+- `data.json` — scheduled-event registration state
+- `uptimeData.json` — cumulative uptime/downtime state
 
-## Acknowledgements
+Both stores:
 
-This project uses code and text generated with the help of [Bing Chat](https://www.bing.com/search?q=Bing+AI&showconv=1) and [ChatGPT](https://chat.openai.com/).
+- serialize overlapping writes through an internal queue
+- write through a temporary file
+- keep a last-known-good `.bak` generation
+- validate stored JSON
+- recover automatically from a valid backup when possible
+
+If event state and its backup are both unusable, WinterBot refuses to continue with an empty store rather than silently discarding registration history.
+
+### Legacy uptime repair
+
+`uptime-repair.json` is an optional one-time migration aid for known historical counter corruption. Normal installations do not need it.
+
+The repository contains `uptime-repair.example.json`, while a real repair file is intentionally Git-ignored because repair anchors are installation-specific.
+
+Once a corrupt total has been repaired and rewritten as a sane value, the repair is not applied again.
+
+## Error reporting and logging
+
+- Routine successful poll telemetry is logged only when `DEBUG_LOGGING=1`.
+- Warnings/errors are written to rotating log files.
+- Daily error summaries remain queued if Discord delivery fails.
+- Weekly reports include uptime and warnings/errors from the configured weekly window.
+- Fatal uncaught exceptions and unhandled promise rejections trigger bounded persistence cleanup and a non-zero process exit so a process manager can restart WinterBot cleanly.
+
+## Discord API robustness
+
+Subscriber REST requests have:
+
+- bounded retry counts
+- exponential backoff with jitter
+- explicit request timeouts
+- rate-limit handling
+- pagination cursor-loop protection
+- a hard pagination safety limit
+
+## Versioning
+
+WinterBot's version comes from `package.json`.
+
+The bot no longer changes its own version at runtime. Tests, backup folders, file mtimes, or deployment extraction cannot silently bump the release version.
+
+## Local development
+
+```bash
+npm ci
+npm test
+npm check
+npm start
+```
+
+## CI
+
+The included GitHub Actions workflow runs on Node.js 24 and performs:
+
+1. `npm ci`
+2. `npm test`
+3. a production dependency audit for high-severity findings
+
+## Architecture
+
+- `src/config` – environment loading and requirement validation
+- `src/discord` – Discord client, lifecycle, message requirements, scheduled-event synchronization, REST helpers
+- `src/logging` – structured logging, error grouping, log rotation, Discord-safe chunking
+- `src/persistence` – queued atomic save/load logic and recovery
+- `src/reporting` – weekly operational summaries
+- `src/versioning` – package-version lookup
+- `tests` – focused regression tests
 
 ## License
 
-This project is licensed under the GNU GPLv3 License. See the [LICENSE](https://github.com/MicaLovesKPOP/WinterBot/blob/main/LICENSE) file for details.
-
+GNU GPLv3

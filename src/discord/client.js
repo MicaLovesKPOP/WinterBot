@@ -1,55 +1,53 @@
-// Discord client creation and lifecycle hooks
-// Responsible for instantiating the Discord client with the required intents,
-// performing login using the configured bot token, and installing process-level
-// error handlers that delegate to the centralized logger and uptime store.
-
-const { Client, GatewayIntentBits } = require('discord.js');
-const { getConfig } = require('../config/index.js');
-const { logError } = require('../logging/logger.js');
-const { saveUptime } = require('../persistence/uptimeStore.js');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { getConfig } = require('../config');
+const { logError } = require('../logging/logger');
 
 let discordClient = null;
-let handlersRegistered = false;
-
-function registerProcessHandlers() {
-  if (handlersRegistered) return;
-
-  process.on('unhandledRejection', async (reason) => {
-    await saveUptime(discordClient).catch(() => {});
-    await logError('Unhandled promise rejection', reason);
-  });
-
-  process.on('uncaughtException', async (error) => {
-    await saveUptime(discordClient).catch(() => {});
-    await logError('Uncaught exception', error);
-  });
-
-  handlersRegistered = true;
-}
 
 function createDiscordClient() {
   if (discordClient) return discordClient;
 
   const config = getConfig();
-  discordClient = new Client({ intents: GatewayIntentBits.Guilds });
+  const intents = [GatewayIntentBits.Guilds];
+  const partials = [];
 
-  registerProcessHandlers();
-
-  // Preserve original login flow; caller can await readiness elsewhere.
-  try {
-    discordClient.login(config.botToken).catch(async (err) => {
-      await logError('Discord login failed', err);
-    });
-  } catch (err) {
-    // Ensure failures are surfaced via centralized logging.
-    logError('Discord login threw synchronously', err);
+  if (Object.keys(config.messageRequirements).length > 0) {
+    intents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent);
+    partials.push(Partials.Message);
   }
 
+  discordClient = new Client({
+    intents,
+    partials,
+    allowedMentions: {
+      parse: [],
+      repliedUser: false,
+    },
+  });
+
   return discordClient;
+}
+
+async function loginDiscordClient(client = discordClient) {
+  if (!client) {
+    throw new Error('Discord client has not been created.');
+  }
+
+  try {
+    await client.login(getConfig().botToken);
+    return client;
+  } catch (error) {
+    await logError('discordClient.login', error);
+    throw error;
+  }
 }
 
 function getDiscordClient() {
   return discordClient;
 }
 
-module.exports = { createDiscordClient, getDiscordClient };
+module.exports = {
+  createDiscordClient,
+  loginDiscordClient,
+  getDiscordClient,
+};

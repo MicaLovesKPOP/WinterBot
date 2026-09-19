@@ -1,70 +1,115 @@
-// Discord lifecycle event registration and startup sequencing
-// Moves the ready-handler logic from the legacy WinterBot.js into a focused
-// module that wires persistence, uptime tracking, and reporting once the
-// Discord client is ready.
+const { getConfig } = require('../config');
+const {
+  logError,
+  logInfo,
+  setLoggingClient,
+  scheduleDailySummary,
+  stopDailySummary,
+} = require('../logging/logger');
+const { loadEvents } = require('../persistence/eventsStore');
+const {
+  loadUptime,
+  saveUptime,
+  formatDurationFromMinutes,
+} = require('../persistence/uptimeStore');
+const { postErrorReport } = require('../reporting/errorReport');
+const { createScheduledEventSynchronizer } = require('./scheduledEvents');
+const {
+  getTextChannelOrThrow,
+  validateConfiguredResources,
+} = require('./guildResources');
+const { registerMessageRequirementHandlers } = require('./messageRequirements');
 
-const { getConfig } = require('../config/index.js');
-const { logError, logInfo, setLoggingClient } = require('../logging/logger.js');
-const { loadEvents } = require('../persistence/eventsStore.js');
-const { loadUptime, saveUptime } = require('../persistence/uptimeStore.js');
-const { postErrorReport } = require('../reporting/errorReport.js');
-const { startScheduledEventLoop } = require('./scheduledEvents.js');
-
-const WEEKLY_REPORT_INTERVAL_MS = 604800000; // 7 days
-const UPTIME_SAVE_INTERVAL_MS = 60 * 1000;
-
+let uptimeSaveIntervalId = null;
 let weeklyReportIntervalId = null;
+let synchronizer = null;
 
 function registerEventHandlers(client, botVersion = '') {
   const config = getConfig();
-
-  // Inject the Discord client into the logger after creation to avoid
-  // circular dependencies while enabling Discord log-channel output.
   setLoggingClient(client);
+  registerMessageRequirementHandlers(client);
 
-  client.once('ready', async () => {
-    logInfo(`Logged in as ${client.user.tag} v${botVersion}!`);
+  client.once('clientReady', async () => {
+    logInfo(`Logged in as ${client.user.tag} v${botVersion}.`, {
+      source: 'discord.ready',
+    });
 
-    try {
-      await loadEvents();
-    } catch (error) {
-      await logError('Error loading events on ready', error);
+    await validateConfiguredResources(client, config);
+    logInfo('Discord resource and permission validation passed.', {
+      source: 'discord.ready',
+    });
+
+    await loadEvents();
+
+    const { startupMessage, processOfflineMinutes } = await loadUptime(
+      client,
+      botVersion
+    );
+
+    let finalMessage = startupMessage;
+    if (processOfflineMinutes > 0) {
+      finalMessage = finalMessage.replace(
+        'is now online',
+        `is now online, after being offline for ${formatDurationFromMinutes(
+          processOfflineMinutes
+        )}`
+      );
     }
 
     try {
-      const { startupMessage } = await loadUptime(client, botVersion);
-      if (startupMessage) {
-        try {
-          const channel = client.channels.cache.get(config.logChannelId);
-          if (channel) await channel.send(startupMessage);
-        } catch (sendError) {
-          await logError('Error sending startup uptime message', sendError);
-        }
-      }
+      const channel = await getTextChannelOrThrow(client, config.logChannelId);
+      await channel.send(finalMessage);
     } catch (error) {
-      await logError('Error loading uptime data on ready', error);
+      await logError('discord.ready.startupMessage', error);
     }
 
-    // Save uptime every 60 seconds to minimize lost time on unexpected restarts.
-    setInterval(() => { saveUptime(client); }, UPTIME_SAVE_INTERVAL_MS);
-
-    try {
-      await startScheduledEventLoop(client);
-    } catch (error) {
-      await logError('Error starting scheduled events loop', error);
+    if (!uptimeSaveIntervalId) {
+      uptimeSaveIntervalId = setInterval(() => {
+        saveUptime(client).catch((error) => {
+          logError('uptimeStore.periodicSave', error).catch(() => {});
+        });
+      }, config.uptimeSaveIntervalMs);
+      uptimeSaveIntervalId.unref?.();
     }
 
-    // Weekly error report interval (runs only if the client is ready).
+    if (!synchronizer) {
+      synchronizer = createScheduledEventSynchronizer(client);
+    }
+    synchronizer.start();
+
+    scheduleDailySummary();
+
     if (!weeklyReportIntervalId) {
       weeklyReportIntervalId = setInterval(() => {
-        if (client.isReady?.()) {
-          postErrorReport(client).catch(async (error) => {
-            await logError('Error posting weekly error report', error);
-          });
-        }
-      }, WEEKLY_REPORT_INTERVAL_MS);
+        postErrorReport(client).catch((error) => {
+          logError('errorReport.interval', error).catch(() => {});
+        });
+      }, config.weeklyReportIntervalMs);
+      weeklyReportIntervalId.unref?.();
     }
   });
 }
 
-module.exports = { registerEventHandlers };
+function stopEventHandlers() {
+  if (uptimeSaveIntervalId) {
+    clearInterval(uptimeSaveIntervalId);
+    uptimeSaveIntervalId = null;
+  }
+
+  if (weeklyReportIntervalId) {
+    clearInterval(weeklyReportIntervalId);
+    weeklyReportIntervalId = null;
+  }
+
+  if (synchronizer) {
+    synchronizer.stop();
+    synchronizer = null;
+  }
+
+  stopDailySummary();
+}
+
+module.exports = {
+  registerEventHandlers,
+  stopEventHandlers,
+};

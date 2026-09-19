@@ -1,100 +1,165 @@
-// Weekly error and uptime reporting
-// Implements the legacy weekly report behavior by reading error logs (including
-// recent rotated backups), formatting uptime/downtime metrics, splitting long
-// messages, and sending them to the configured log/report channel.
-
 const fs = require('fs');
-const path = require('path');
-const { getConfig } = require('../config/index.js');
-const { formatDuration, getUptimeTotals, saveUptime } = require('../persistence/uptimeStore.js');
-const { logError, logInfo, splitMessageIntoChunks } = require('../logging/logger.js');
+const { getConfig } = require('../config');
+const {
+  formatDurationFromMinutes,
+  getUptimeTotals,
+  saveUptime,
+} = require('../persistence/uptimeStore');
+const {
+  logError,
+  logInfo,
+  splitMessageIntoChunks,
+  getLogPaths,
+} = require('../logging/logger');
+const { getTextChannelOrThrow } = require('../discord/guildResources');
 
-// Include the primary log plus a limited number of rotated backups to reflect
-// the past week's activity without overwhelming output.
-const MAX_ROTATED_LOGS = 2; // Reads error.log plus error.log.1 and error.log.2
-const DEFAULT_DISCORD_CHUNK_SIZE = 2000;
+const MAX_LOG_BACKUPS = 5;
 
-function getLogFilePaths() {
-  const baseLogPath = path.join(process.cwd(), 'logs', 'error.log');
-  const paths = [baseLogPath];
+async function readStructuredEntries(periodMs = null) {
+  const { structuredLogFile } = getLogPaths();
+  const files = [
+    ...Array.from(
+      { length: MAX_LOG_BACKUPS },
+      (_, index) => `${structuredLogFile}.${MAX_LOG_BACKUPS - index}`
+    ),
+    structuredLogFile,
+  ];
 
-  for (let i = 1; i <= MAX_ROTATED_LOGS; i++) {
-    paths.push(`${baseLogPath}.${i}`);
+  const entries = [];
+
+  for (const file of files) {
+    let content;
+    try {
+      content = await fs.promises.readFile(file, 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      await logError('errorReport.readStructuredEntries', error, { file });
+      continue;
+    }
+
+    for (const line of content.split('\n').filter(Boolean)) {
+      try {
+        entries.push(JSON.parse(line));
+      } catch (_) {}
+    }
   }
 
-  return paths;
+  if (!periodMs) return entries;
+
+  const cutoff = Date.now() - periodMs;
+  return entries.filter((entry) => {
+    const timestamp = Date.parse(entry.isoTimestamp || '');
+    return Number.isFinite(timestamp) && timestamp >= cutoff;
+  });
 }
 
-async function readLogFile(filePath) {
-  try {
-    const content = await fs.promises.readFile(filePath, 'utf8');
-    return content;
-  } catch (err) {
-    if (err && err.code === 'ENOENT') return '';
-    await logError('Error reading log file for report', err);
-    return '';
+function summarizeErrors(entries) {
+  const errors = entries.filter(
+    (entry) =>
+      entry.level === 'error' ||
+      entry.level === 'fatal' ||
+      entry.level === 'warn'
+  );
+  const grouped = new Map();
+
+  for (const entry of errors) {
+    const signature =
+      entry.metadata?.signature || `${entry.source}|${entry.message}`;
+    const existing = grouped.get(signature);
+
+    if (existing) {
+      existing.count += 1;
+      existing.lastTimestamp = entry.timestamp;
+      continue;
+    }
+
+    grouped.set(signature, {
+      source: entry.source,
+      message: entry.message,
+      count: 1,
+      firstTimestamp: entry.timestamp,
+      lastTimestamp: entry.timestamp,
+      recoveryAction: entry.metadata?.recoveryAction || '',
+    });
   }
+
+  return [...grouped.values()].sort(
+    (left, right) => right.count - left.count
+  );
 }
 
-async function buildErrorSection() {
-  const logFilePaths = getLogFilePaths();
-  const parts = [];
-
-  for (const logPath of logFilePaths) {
-    // eslint-disable-next-line no-await-in-loop
-    const content = await readLogFile(logPath);
-    if (!content || !content.trim()) continue;
-
-    parts.push(`--- ${path.basename(logPath)} ---\n${content.trim()}`);
-  }
-
-  if (!parts.length) {
-    return 'No errors reported this week.';
-  }
-
-  return `\`\`\`\n${parts.join('\n\n')}\n\`\`\``;
+function buildUptimeLines(currentUptimeMinutes, totalUptimeMinutes, totalDowntimeMinutes) {
+  return [
+    'Uptime',
+    `- Current uptime: ${formatDurationFromMinutes(currentUptimeMinutes)}`,
+    `- Total uptime: ${formatDurationFromMinutes(totalUptimeMinutes)}`,
+    `- Total downtime: ${formatDurationFromMinutes(totalDowntimeMinutes)}`,
+  ];
 }
 
 async function buildReportMessage(client) {
+  const config = getConfig();
   await saveUptime(client);
 
-  const currentUptimeMinutes = Math.floor((client && typeof client.uptime === 'number' ? client.uptime : 0) / 60000);
+  const currentUptimeMinutes = Math.floor(
+    Math.max(0, Number(client?.uptime) || 0) / 60_000
+  );
   const { totalUptimeMinutes, totalDowntimeMinutes } = getUptimeTotals();
-  const errorSection = await buildErrorSection();
+  const entries = await readStructuredEntries(config.weeklyReportIntervalMs);
+  const summary = summarizeErrors(entries).slice(0, 10);
 
-  const header =
-    `Current uptime: \`${formatDuration(currentUptimeMinutes)}\`\n` +
-    `Total uptime: \`${formatDuration(totalUptimeMinutes)}\`\n` +
-    `Total downtime: \`${formatDuration(totalDowntimeMinutes)}\`\n\n`;
+  const lines = [
+    'WinterBot weekly report',
+    '',
+    ...buildUptimeLines(
+      currentUptimeMinutes,
+      totalUptimeMinutes,
+      totalDowntimeMinutes
+    ),
+    '',
+    'Error summary',
+  ];
 
-  return `${header}Weekly error report:\n${errorSection}`;
+  if (summary.length === 0) {
+    lines.push('- No warnings or errors recorded this period.');
+  } else {
+    for (const item of summary) {
+      lines.push(`- ${item.source}: ${item.message} — ${item.count}x`);
+      if (item.recoveryAction) {
+        lines.push(`  Recovery: ${item.recoveryAction}`);
+      }
+    }
+  }
+
+  return lines.join('\n');
 }
 
 async function sendReport(client, reportText) {
   const config = getConfig();
-  const channel = client && client.channels && client.channels.cache.get(config.logChannelId);
-  if (!channel) return;
+  const channel = await getTextChannelOrThrow(client, config.logChannelId);
+  const chunks = splitMessageIntoChunks(reportText, 1900);
 
-  const chunks = splitMessageIntoChunks(reportText, DEFAULT_DISCORD_CHUNK_SIZE);
   for (const chunk of chunks) {
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await channel.send(chunk);
-    } catch (err) {
-      await logError('Error sending error report chunk', err);
-      break;
-    }
+    await channel.send(chunk);
   }
 }
 
 async function postErrorReport(client) {
   try {
-    const report = await buildReportMessage(client);
-    await sendReport(client, report);
-    logInfo('Weekly error report posted.');
+    const reportText = await buildReportMessage(client);
+    await sendReport(client, reportText);
+    logInfo('Weekly error report posted.', { source: 'errorReport' });
+    return true;
   } catch (error) {
-    await logError('Error posting error report', error);
+    await logError('errorReport.post', error);
+    return false;
   }
 }
 
-module.exports = { postErrorReport };
+module.exports = {
+  postErrorReport,
+  buildReportMessage,
+  summarizeErrors,
+  buildUptimeLines,
+  readStructuredEntries,
+};
