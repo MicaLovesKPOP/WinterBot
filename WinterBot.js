@@ -114,9 +114,25 @@ async function bootstrap() {
   initializeUptimeStore();
   registerProcessHandlers();
 
-  const { version: botVersion } = initializeVersionTracker();
+  const { version: botVersion, action: versionAction } = initializeVersionTracker();
 
-  logInfo(`Booting WinterBot v${botVersion}.`, { source: 'app.bootstrap' });
+  logInfo(`Booting WinterBot v${botVersion}.`, {
+    source: 'app.bootstrap',
+    versionAction,
+  });
+
+  if (versionAction === 'patch' || versionAction === 'minor') {
+    logInfo(
+      `Automatic ${versionAction} version bump applied; runtime version is now v${botVersion}.`,
+      { source: 'versionTracker', versionAction, botVersion }
+    );
+  } else if (versionAction === 'initialized' || versionAction === 'release-baseline') {
+    logInfo(`Version baseline initialized at v${botVersion}.`, {
+      source: 'versionTracker',
+      versionAction,
+      botVersion,
+    });
+  }
 
   client = createDiscordClient();
   registerEventHandlers(client, botVersion);
