@@ -180,16 +180,34 @@ Subscriber REST requests have:
 
 ## Versioning
 
-WinterBot's version comes from `package.json`.
+`package.json` defines the formal release baseline. WinterBot then keeps an installation-local `.versionState.json` so manual runtime code changes can still receive automatic versions without modifying tracked source files.
 
-The bot no longer changes its own version at runtime. Tests, backup folders, file mtimes, or deployment extraction cannot silently bump the release version.
+The automatic signature hashes actual file contents, not mtimes. It watches only:
+
+- `WinterBot.js`
+- `src/**/*.js`
+- `package.json`
+
+Tests, docs, backup folders, logs, `.github/`, file timestamps, and `package-lock.json` are deliberately ignored.
+
+Version behavior:
+
+- first start of a formal release: use the `package.json` version and create a new baseline
+- same watched file set with changed contents: patch bump (`2.6.1` → `2.6.2`)
+- runtime source file added, removed, or renamed: minor bump (`2.6.2` → `2.7.0`)
+- no watched-content change: no bump
+- a newer formal `package.json` release establishes the new baseline without a second automatic bump
+
+The state file uses a versioned schema and keeps `.versionState.json.bak` as a recovery copy. Legacy size/mtime state files are safely migrated to the current release baseline rather than causing a fake version bump.
+
+Do not copy `.versionState.json` between unrelated installations. It is runtime state and is Git-ignored.
 
 ## Local development
 
 ```bash
 npm ci
 npm test
-npm check
+npm run check
 npm start
 ```
 
