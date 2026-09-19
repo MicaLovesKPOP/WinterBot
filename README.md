@@ -30,8 +30,8 @@ WEEKLY_REPORT_INTERVAL_MS=604800000
 UNSUBSCRIBE_GRACE_CYCLES=6
 MAX_API_RETRIES=4
 RETRY_BASE_DELAY_MS=1000
-MEDIA_ONLY_CHANNEL_IDS=
-MEDIA_ONLY_EMBED_GRACE_MS=4000
+MESSAGE_REQUIREMENTS_FILE=message-requirements.json
+MESSAGE_REQUIREMENTS_EMBED_GRACE_MS=4000
 DEBUG_LOGGING=0
 ```
 
@@ -41,22 +41,56 @@ DEBUG_LOGGING=0
 - `1` = username only
 - `2` = display name plus username when they differ
 
-### Media-only channels
+### Per-channel message requirements
 
-Set `MEDIA_ONLY_CHANNEL_IDS` to one or more Discord channel IDs separated by commas or spaces. Leave it empty to disable the feature.
+WinterBot can enforce declarative requirements on any channel it can see. Copy `message-requirements.example.json` to `message-requirements.json` and configure rules by Discord channel ID. The runtime file is ignored by Git so each server owner can keep their own policy without modifying WinterBot's source.
 
-In configured channels, WinterBot allows a message only when it contains image, video, or audio media. Captions are allowed, but the payload stays strict:
+Each channel contains a `requirements` array. All requirements in that array must pass. Supported rule types are currently:
 
-- Every uploaded attachment must be image, video, or audio media.
-- Every URL in the message must resolve to a Discord embed containing image, video, or audio media.
-- Common audio-provider embeds such as SoundCloud, Spotify, Bandcamp, Apple Music, TIDAL, Deezer, Mixcloud, and Audiomack are recognized from Discord's provider metadata.
-- At least one qualifying attachment or embed must be present.
-- Non-media files, plain text, suppressed/unembedded links, and ordinary webpage links are deleted.
-- WinterBot's own messages and Discord system messages are exempt.
+- `mediaOnly` — requires image, video, or audio media. Captions are allowed, but non-media attachments and links that do not resolve to media are rejected.
+- `requiredLink` — requires one or more links matching configured domains, optional path prefixes, and optional query-parameter rules.
 
-`MEDIA_ONLY_EMBED_GRACE_MS` controls how long WinterBot waits before re-fetching a link message so Discord has time to build its embed. The default is 4000 ms.
+Example:
 
-When at least one media-only channel is configured, enable the **Message Content Intent** for WinterBot in the Discord Developer Portal. WinterBot also needs **View Channel**, **Read Message History**, and **Manage Messages** in each enforced channel. When no media-only channels are configured, WinterBot does not request the privileged Message Content intent.
+```json
+{
+  "123456789012345678": {
+    "requirements": [
+      {
+        "type": "mediaOnly"
+      }
+    ]
+  },
+  "234567890123456789": {
+    "requirements": [
+      {
+        "type": "requiredLink",
+        "domains": ["steamcommunity.com"],
+        "pathPrefixes": ["/sharedfiles/filedetails", "/workshop/filedetails"],
+        "queryParams": {
+          "id": "^\\d+$"
+        },
+        "minMatches": 1
+      }
+    ]
+  }
+}
+```
+
+`requiredLink` options:
+
+- `domains` is required. Subdomains are accepted by default; set `allowSubdomains` to `false` for exact-host matching.
+- `pathPrefixes` is optional. When provided, a link must begin with one of those URL paths.
+- `queryParams` is optional. Use `true` to require a parameter to exist, or a regular-expression string to validate its value.
+- `minMatches` defaults to `1`.
+- `rejectOtherLinks` defaults to `false`. Set it to `true` if every link in the message must match the rule.
+- `ignoreBots` is a per-channel policy option and defaults to `true`.
+
+You may also provide the same JSON through `MESSAGE_REQUIREMENTS_JSON`; entries there override channels with the same ID from the file. `MEDIA_ONLY_CHANNEL_IDS` remains supported as a backwards-compatible shorthand and is merged into the generic rules.
+
+`MESSAGE_REQUIREMENTS_EMBED_GRACE_MS` controls how long WinterBot waits before re-fetching messages whose `mediaOnly` rule depends on Discord-generated embeds. The default is 4000 ms.
+
+When at least one channel has message requirements, enable the **Message Content Intent** for WinterBot in the Discord Developer Portal. WinterBot also needs **View Channel**, **Read Message History**, and **Manage Messages** in each enforced channel. When no requirements are configured, WinterBot does not request the privileged Message Content intent.
 
 ## Local development
 
@@ -69,7 +103,7 @@ npm start
 ## Architecture
 
 - `src/config` – environment loading and validation
-- `src/discord` – Discord client, event lifecycle, display formatting, scheduled-event sync, API helpers
+- `src/discord` – Discord client, event lifecycle, message requirements, display formatting, scheduled-event sync, API helpers
 - `src/logging` – structured logging, alert suppression, Discord-safe message chunking
 - `src/persistence` – atomic save/load logic for event data and uptime data
 - `src/reporting` – weekly operational summaries

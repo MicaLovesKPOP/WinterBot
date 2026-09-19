@@ -1,0 +1,27 @@
+{
+  "123456789012345678": {
+    "requirements": [
+      {
+        "type": "mediaOnly"
+      }
+    ]
+  },
+  "234567890123456789": {
+    "requirements": [
+      {
+        "type": "requiredLink",
+        "domains": [
+          "steamcommunity.com"
+        ],
+        "pathPrefixes": [
+          "/sharedfiles/filedetails",
+          "/workshop/filedetails"
+        ],
+        "queryParams": {
+          "id": "^\\d+$"
+        },
+        "minMatches": 1
+      }
+    ]
+  }
+}

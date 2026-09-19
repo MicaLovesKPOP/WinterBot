@@ -32,7 +32,7 @@ async function createDiscordClient() {
   const intents = [GatewayIntentBits.Guilds];
   const partials = [];
 
-  if (config.mediaOnlyChannelIds.length > 0) {
+  if (Object.keys(config.messageRequirements).length > 0) {
     intents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent);
     partials.push(Partials.Message);
   }

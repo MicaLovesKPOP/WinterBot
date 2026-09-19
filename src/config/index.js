@@ -1,4 +1,9 @@
 const path = require('path');
+const {
+  loadMessageRequirements,
+  parseSnowflakeList,
+  resolveMessageRequirementsPath,
+} = require('./messageRequirements');
 
 let dotenv = { config: () => ({}) };
 try {
@@ -19,25 +24,6 @@ function parseInteger(value, fallback, { min = null, max = null } = {}) {
   if (min !== null && parsed < min) return fallback;
   if (max !== null && parsed > max) return fallback;
   return parsed;
-}
-
-function parseSnowflakeList(value, variableName) {
-  const rawValue = String(value ?? '').trim();
-  if (!rawValue) return [];
-
-  const ids = rawValue
-    .split(/[\s,]+/)
-    .map((id) => id.trim())
-    .filter(Boolean);
-
-  const invalidIds = ids.filter((id) => !/^\d{15,22}$/.test(id));
-  if (invalidIds.length > 0) {
-    throw new Error(
-      `Invalid Discord channel ID(s) in ${variableName}: ${invalidIds.join(', ')}.`
-    );
-  }
-
-  return Array.from(new Set(ids));
 }
 
 function loadConfig() {
@@ -67,6 +53,22 @@ function loadConfig() {
     max: 2,
   });
 
+  const legacyMediaOnlyChannelIds = parseSnowflakeList(
+    process.env.MEDIA_ONLY_CHANNEL_IDS,
+    'MEDIA_ONLY_CHANNEL_IDS'
+  );
+  const explicitRequirementsFile = String(process.env.MESSAGE_REQUIREMENTS_FILE || '').trim();
+  const messageRequirementsFile = resolveMessageRequirementsPath(
+    process.cwd(),
+    explicitRequirementsFile
+  );
+  const messageRequirements = loadMessageRequirements({
+    filePath: messageRequirementsFile,
+    explicitFilePath: Boolean(explicitRequirementsFile),
+    jsonValue: process.env.MESSAGE_REQUIREMENTS_JSON,
+    legacyMediaOnlyChannelIds,
+  });
+
   loadedConfig = {
     botToken: String(requiredVars.botToken),
     guildId: String(requiredVars.guildId),
@@ -86,14 +88,16 @@ function loadConfig() {
     maxApiRetries: parseInteger(process.env.MAX_API_RETRIES, 4, { min: 0, max: 20 }),
     retryBaseDelayMs: parseInteger(process.env.RETRY_BASE_DELAY_MS, 1_000, { min: 100 }),
     errorRegistryMaxSize: parseInteger(process.env.ERROR_REGISTRY_MAX_SIZE, 500, { min: 10, max: 5000 }),
-    mediaOnlyChannelIds: parseSnowflakeList(
-      process.env.MEDIA_ONLY_CHANNEL_IDS,
-      'MEDIA_ONLY_CHANNEL_IDS'
+    messageRequirements,
+    messageRequirementsFile,
+    messageRequirementsEmbedGraceMs: parseInteger(
+      process.env.MESSAGE_REQUIREMENTS_EMBED_GRACE_MS ?? process.env.MEDIA_ONLY_EMBED_GRACE_MS,
+      4_000,
+      {
+        min: 0,
+        max: 15_000,
+      }
     ),
-    mediaOnlyEmbedGraceMs: parseInteger(process.env.MEDIA_ONLY_EMBED_GRACE_MS, 4_000, {
-      min: 0,
-      max: 15_000,
-    }),
     userDisplayMode,
     userDisplayModes: USER_DISPLAY_MODES,
     debugLoggingEnabled: String(process.env.DEBUG_LOGGING || '').trim() === '1',

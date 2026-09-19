@@ -24,6 +24,7 @@ const AUDIO_PROVIDER_HOSTS = [
   'audiomack.com',
 ];
 const URL_PATTERN = /https?:\/\/[^\s<>]+/gi;
+const TRAILING_URL_PUNCTUATION = /[),.!?;:'"]+$/;
 
 function toArray(value) {
   if (!value) return [];
@@ -33,7 +34,8 @@ function toArray(value) {
 }
 
 function extractUrls(content) {
-  return String(content || '').match(URL_PATTERN) || [];
+  const matches = String(content || '').match(URL_PATTERN) || [];
+  return matches.map((url) => url.replace(TRAILING_URL_PUNCTUATION, ''));
 }
 
 function isMediaAttachment(attachment) {
@@ -94,13 +96,12 @@ function isMediaEmbed(embed) {
   );
 }
 
-function evaluateMediaOnlyMessage(message) {
+function evaluateMediaOnly(message) {
   const attachments = toArray(message?.attachments);
   const embeds = toArray(message?.embeds);
   const urls = Array.from(new Set(extractUrls(message?.content)));
 
-  const nonMediaAttachments = attachments.filter((attachment) => !isMediaAttachment(attachment));
-  if (nonMediaAttachments.length > 0) {
+  if (attachments.some((attachment) => !isMediaAttachment(attachment))) {
     return {
       allowed: false,
       reason: 'contains a non-media attachment',
@@ -116,7 +117,7 @@ function evaluateMediaOnlyMessage(message) {
     if (nonMediaEmbeds.length > 0 || mediaEmbeds.length < urls.length) {
       return {
         allowed: false,
-        reason: 'contains a link that did not resolve to an image, video, or audio embed',
+        reason: 'contains a link that did not resolve to image, video, or audio media',
       };
     }
   }
@@ -128,10 +129,97 @@ function evaluateMediaOnlyMessage(message) {
     };
   }
 
-  return {
-    allowed: true,
-    reason: null,
-  };
+  return { allowed: true, reason: null };
+}
+
+function hostnameMatches(hostname, domain, allowSubdomains) {
+  if (hostname === domain) return true;
+  return allowSubdomains && hostname.endsWith(`.${domain}`);
+}
+
+function urlMatchesRequiredLinkRule(rawUrl, rule) {
+  let parsed;
+
+  try {
+    parsed = new URL(rawUrl);
+  } catch (_) {
+    return false;
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+
+  const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (!rule.domains.some((domain) => hostnameMatches(hostname, domain, rule.allowSubdomains))) {
+    return false;
+  }
+
+  if (
+    rule.pathPrefixes.length > 0 &&
+    !rule.pathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))
+  ) {
+    return false;
+  }
+
+  for (const [name, requirement] of Object.entries(rule.queryParams)) {
+    const value = parsed.searchParams.get(name);
+    if (value === null) return false;
+    if (requirement !== true && !new RegExp(requirement).test(value)) return false;
+  }
+
+  return true;
+}
+
+function describeRequiredLinkRule(rule) {
+  const domainText = rule.domains.join(' or ');
+  if (rule.pathPrefixes.length === 0) return `a link to ${domainText}`;
+  return `a matching link to ${domainText}`;
+}
+
+function evaluateRequiredLink(message, rule) {
+  const urls = Array.from(new Set(extractUrls(message?.content)));
+  const matches = urls.filter((url) => urlMatchesRequiredLinkRule(url, rule));
+
+  if (matches.length < rule.minMatches) {
+    return {
+      allowed: false,
+      reason: `requires at least ${rule.minMatches} ${describeRequiredLinkRule(rule)}`,
+    };
+  }
+
+  if (rule.rejectOtherLinks && matches.length !== urls.length) {
+    return {
+      allowed: false,
+      reason: 'contains a link that does not match the allowed link requirements',
+    };
+  }
+
+  return { allowed: true, reason: null };
+}
+
+const RULE_EVALUATORS = {
+  mediaOnly: (message) => evaluateMediaOnly(message),
+  requiredLink: (message, rule) => evaluateRequiredLink(message, rule),
+};
+
+function evaluateMessageRequirements(message, policy) {
+  for (const rule of policy.requirements) {
+    const evaluator = RULE_EVALUATORS[rule.type];
+    if (!evaluator) {
+      return {
+        allowed: false,
+        reason: `has an unsupported configured requirement type: ${rule.type}`,
+      };
+    }
+
+    const result = evaluator(message, rule);
+    if (!result.allowed) return result;
+  }
+
+  return { allowed: true, reason: null };
+}
+
+function policyNeedsEmbedRefresh(policy) {
+  return policy.requirements.some((rule) => rule.type === 'mediaOnly');
 }
 
 function sleep(milliseconds) {
@@ -142,11 +230,16 @@ function isUnknownMessageError(error) {
   return Number(error?.code || error?.rawError?.code) === 10008;
 }
 
-function shouldIgnoreMessage(message, channelIds, botUserId) {
-  if (!message?.guildId) return true;
-  if (!channelIds.has(String(message.channelId))) return true;
+function getPolicyForMessage(message, policies) {
+  if (!message?.channelId) return null;
+  return policies[String(message.channelId)] || null;
+}
+
+function shouldIgnoreMessage(message, policy, botUserId) {
+  if (!policy) return true;
   if (message.system) return true;
   if (botUserId && String(message.author?.id || '') === String(botUserId)) return true;
+  if (policy.ignoreBots && message.author?.bot) return true;
   return false;
 }
 
@@ -155,41 +248,50 @@ async function fetchFreshMessage(message) {
   return message.fetch(true);
 }
 
-async function enforceMediaOnlyMessage(
+async function enforceMessageRequirements(
   message,
-  { channelIds, botUserId, embedGraceMs, forceRefresh = false }
+  { policies, botUserId, embedGraceMs, forceRefresh = false }
 ) {
-  if (shouldIgnoreMessage(message, channelIds, botUserId)) return;
+  let policy = getPolicyForMessage(message, policies);
+  if (shouldIgnoreMessage(message, policy, botUserId)) return;
 
   let currentMessage = message;
 
   try {
     if (currentMessage.partial || forceRefresh) {
       currentMessage = await fetchFreshMessage(currentMessage);
+      policy = getPolicyForMessage(currentMessage, policies);
+      if (shouldIgnoreMessage(currentMessage, policy, botUserId)) return;
     }
 
-    if (extractUrls(currentMessage?.content).length > 0 && embedGraceMs > 0) {
+    if (
+      policyNeedsEmbedRefresh(policy) &&
+      extractUrls(currentMessage?.content).length > 0 &&
+      embedGraceMs > 0
+    ) {
       await sleep(embedGraceMs);
       currentMessage = await fetchFreshMessage(currentMessage);
+      policy = getPolicyForMessage(currentMessage, policies);
+      if (shouldIgnoreMessage(currentMessage, policy, botUserId)) return;
     }
   } catch (error) {
     if (isUnknownMessageError(error)) return;
 
-    await logError('mediaOnly.refreshMessage', error, {
+    await logError('messageRequirements.refreshMessage', error, {
       channelId: message?.channelId,
       messageId: message?.id,
     });
     return;
   }
 
-  const result = evaluateMediaOnlyMessage(currentMessage);
+  const result = evaluateMessageRequirements(currentMessage, policy);
   if (result.allowed) return;
 
   if (currentMessage?.deletable === false) {
     logWarn(
-      `Cannot delete invalid media-only message ${currentMessage.id}; check WinterBot's Manage Messages permission.`,
+      `Cannot delete message ${currentMessage.id} that failed channel requirements; check WinterBot's Manage Messages permission.`,
       {
-        source: 'mediaOnly',
+        source: 'messageRequirements',
         channelId: currentMessage.channelId,
         messageId: currentMessage.id,
         reason: result.reason,
@@ -201,8 +303,8 @@ async function enforceMediaOnlyMessage(
   try {
     await currentMessage.delete();
 
-    logInfo(`Deleted invalid media-only message ${currentMessage.id}: ${result.reason}.`, {
-      source: 'mediaOnly',
+    logInfo(`Deleted message ${currentMessage.id} that failed channel requirements: ${result.reason}.`, {
+      source: 'messageRequirements',
       channelId: currentMessage.channelId,
       messageId: currentMessage.id,
       authorId: currentMessage.author?.id,
@@ -211,7 +313,7 @@ async function enforceMediaOnlyMessage(
   } catch (error) {
     if (isUnknownMessageError(error)) return;
 
-    await logError('mediaOnly.deleteMessage', error, {
+    await logError('messageRequirements.deleteMessage', error, {
       channelId: currentMessage?.channelId,
       messageId: currentMessage?.id,
       reason: result.reason,
@@ -219,28 +321,30 @@ async function enforceMediaOnlyMessage(
   }
 }
 
-function registerMediaOnlyChannelHandlers(client) {
+function registerMessageRequirementHandlers(client) {
   const config = getConfig();
-  const channelIds = new Set(config.mediaOnlyChannelIds || []);
+  const policies = config.messageRequirements || {};
+  const channelIds = Object.keys(policies);
 
-  if (channelIds.size === 0) return;
+  if (channelIds.length === 0) return;
 
   const pendingMessageIds = new Set();
 
   function queueEnforcement(message, source, forceRefresh = false) {
-    if (shouldIgnoreMessage(message, channelIds, client.user?.id)) return;
+    const policy = getPolicyForMessage(message, policies);
+    if (shouldIgnoreMessage(message, policy, client.user?.id)) return;
     if (!message?.id || pendingMessageIds.has(message.id)) return;
 
     pendingMessageIds.add(message.id);
 
-    enforceMediaOnlyMessage(message, {
-      channelIds,
+    enforceMessageRequirements(message, {
+      policies,
       botUserId: client.user?.id,
-      embedGraceMs: config.mediaOnlyEmbedGraceMs,
+      embedGraceMs: config.messageRequirementsEmbedGraceMs,
       forceRefresh,
     })
       .catch((error) =>
-        logError(`mediaOnly.${source}`, error, {
+        logError(`messageRequirements.${source}`, error, {
           channelId: message?.channelId,
           messageId: message?.id,
         })
@@ -258,9 +362,9 @@ function registerMediaOnlyChannelHandlers(client) {
     queueEnforcement(newMessage, 'messageUpdate', true);
   });
 
-  logInfo(`Media-only enforcement enabled for ${channelIds.size} channel(s).`, {
-    source: 'mediaOnly',
-    channelIds: Array.from(channelIds),
+  logInfo(`Message requirements enabled for ${channelIds.length} channel(s).`, {
+    source: 'messageRequirements',
+    channelIds,
   });
 }
 
@@ -268,6 +372,9 @@ module.exports = {
   extractUrls,
   isMediaAttachment,
   isMediaEmbed,
-  evaluateMediaOnlyMessage,
-  registerMediaOnlyChannelHandlers,
+  urlMatchesRequiredLinkRule,
+  evaluateMediaOnly,
+  evaluateRequiredLink,
+  evaluateMessageRequirements,
+  registerMessageRequirementHandlers,
 };
