@@ -4,6 +4,7 @@ const { loadEvents } = require('../persistence/eventsStore');
 const { loadUptime, saveUptime, formatDurationFromMinutes } = require('../persistence/uptimeStore');
 const { createScheduledEventSynchronizer } = require('./scheduledEvents');
 const { getTextChannelOrThrow } = require('./guildResources');
+const { registerMediaOnlyChannelHandlers } = require('./mediaOnly');
 
 let uptimeSaveIntervalId = null;
 let synchronizer = null;
@@ -11,6 +12,7 @@ let synchronizer = null;
 function registerEventHandlers(client, botVersion = '') {
   const config = getConfig();
   setLoggingClient(client);
+  registerMediaOnlyChannelHandlers(client);
 
   client.once('clientReady', async () => {
     logInfo(`Logged in as ${client.user.tag} v${botVersion}.`, { source: 'discord.ready' });

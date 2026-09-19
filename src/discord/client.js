@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { getConfig } = require('../config');
 const { logError } = require('../logging/logger');
 const { saveUptime } = require('../persistence/uptimeStore');
@@ -29,7 +29,15 @@ async function createDiscordClient() {
   if (discordClient) return discordClient;
 
   const config = getConfig();
-  discordClient = new Client({ intents: [GatewayIntentBits.Guilds] });
+  const intents = [GatewayIntentBits.Guilds];
+  const partials = [];
+
+  if (config.mediaOnlyChannelIds.length > 0) {
+    intents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent);
+    partials.push(Partials.Message);
+  }
+
+  discordClient = new Client({ intents, partials });
   registerProcessHandlers();
 
   try {

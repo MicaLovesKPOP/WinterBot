@@ -21,6 +21,25 @@ function parseInteger(value, fallback, { min = null, max = null } = {}) {
   return parsed;
 }
 
+function parseSnowflakeList(value, variableName) {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) return [];
+
+  const ids = rawValue
+    .split(/[\s,]+/)
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  const invalidIds = ids.filter((id) => !/^\d{15,22}$/.test(id));
+  if (invalidIds.length > 0) {
+    throw new Error(
+      `Invalid Discord channel ID(s) in ${variableName}: ${invalidIds.join(', ')}.`
+    );
+  }
+
+  return Array.from(new Set(ids));
+}
+
 function loadConfig() {
   if (loadedConfig) return loadedConfig;
 
@@ -67,6 +86,14 @@ function loadConfig() {
     maxApiRetries: parseInteger(process.env.MAX_API_RETRIES, 4, { min: 0, max: 20 }),
     retryBaseDelayMs: parseInteger(process.env.RETRY_BASE_DELAY_MS, 1_000, { min: 100 }),
     errorRegistryMaxSize: parseInteger(process.env.ERROR_REGISTRY_MAX_SIZE, 500, { min: 10, max: 5000 }),
+    mediaOnlyChannelIds: parseSnowflakeList(
+      process.env.MEDIA_ONLY_CHANNEL_IDS,
+      'MEDIA_ONLY_CHANNEL_IDS'
+    ),
+    mediaOnlyEmbedGraceMs: parseInteger(process.env.MEDIA_ONLY_EMBED_GRACE_MS, 4_000, {
+      min: 0,
+      max: 15_000,
+    }),
     userDisplayMode,
     userDisplayModes: USER_DISPLAY_MODES,
     debugLoggingEnabled: String(process.env.DEBUG_LOGGING || '').trim() === '1',
