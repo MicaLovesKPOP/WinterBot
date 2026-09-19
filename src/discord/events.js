@@ -1,69 +1,62 @@
-// Discord lifecycle event registration and startup sequencing
-// Moves the ready-handler logic from the legacy WinterBot.js into a focused
-// module that wires persistence, uptime tracking, and reporting once the
-// Discord client is ready.
+const { getConfig } = require('../config');
+const { logError, logInfo, setLoggingClient, scheduleDailySummary } = require('../logging/logger');
+const { loadEvents } = require('../persistence/eventsStore');
+const { loadUptime, saveUptime, formatDurationFromMinutes } = require('../persistence/uptimeStore');
+const { createScheduledEventSynchronizer } = require('./scheduledEvents');
+const { getTextChannelOrThrow } = require('./guildResources');
 
-const { getConfig } = require('../config/index.js');
-const { logError, logInfo, setLoggingClient } = require('../logging/logger.js');
-const { loadEvents } = require('../persistence/eventsStore.js');
-const { loadUptime, saveUptime } = require('../persistence/uptimeStore.js');
-const { postErrorReport } = require('../reporting/errorReport.js');
-const { startScheduledEventLoop } = require('./scheduledEvents.js');
-
-const WEEKLY_REPORT_INTERVAL_MS = 604800000; // 7 days
-const UPTIME_SAVE_INTERVAL_MS = 60 * 1000;
-
-let weeklyReportIntervalId = null;
+let uptimeSaveIntervalId = null;
+let synchronizer = null;
 
 function registerEventHandlers(client, botVersion = '') {
   const config = getConfig();
-
-  // Inject the Discord client into the logger after creation to avoid
-  // circular dependencies while enabling Discord log-channel output.
   setLoggingClient(client);
 
-  client.once('ready', async () => {
-    logInfo(`Logged in as ${client.user.tag} v${botVersion}!`);
+  client.once('clientReady', async () => {
+    logInfo(`Logged in as ${client.user.tag} v${botVersion}.`, { source: 'discord.ready' });
 
     try {
       await loadEvents();
     } catch (error) {
-      await logError('Error loading events on ready', error);
+      await logError('discord.ready.loadEvents', error);
     }
 
     try {
-      const { startupMessage } = await loadUptime(client, botVersion);
-      if (startupMessage) {
-        try {
-          const channel = client.channels.cache.get(config.logChannelId);
-          if (channel) await channel.send(startupMessage);
-        } catch (sendError) {
-          await logError('Error sending startup uptime message', sendError);
-        }
+      const { startupMessage, processOfflineMinutes } = await loadUptime(client, botVersion);
+
+      let finalMessage = startupMessage;
+
+      if (processOfflineMinutes > 0) {
+        finalMessage = finalMessage.replace(
+          'is now online',
+          `is now online, after being offline for ${formatDurationFromMinutes(processOfflineMinutes)}`
+        );
       }
+
+      const channel = await getTextChannelOrThrow(client, config.logChannelId);
+      await channel.send(finalMessage);
     } catch (error) {
-      await logError('Error loading uptime data on ready', error);
+      await logError('discord.ready.startupMessage', error);
     }
 
-    // Save uptime every 60 seconds to minimize lost time on unexpected restarts.
-    setInterval(() => { saveUptime(client); }, UPTIME_SAVE_INTERVAL_MS);
+    if (!uptimeSaveIntervalId) {
+      uptimeSaveIntervalId = setInterval(() => {
+        saveUptime(client).catch(() => {});
+      }, config.uptimeSaveIntervalMs);
+
+      uptimeSaveIntervalId.unref?.();
+    }
 
     try {
-      await startScheduledEventLoop(client);
+      if (!synchronizer) {
+        synchronizer = createScheduledEventSynchronizer(client);
+      }
+      synchronizer.start();
     } catch (error) {
-      await logError('Error starting scheduled events loop', error);
+      await logError('discord.ready.startSynchronizer', error);
     }
 
-    // Weekly error report interval (runs only if the client is ready).
-    if (!weeklyReportIntervalId) {
-      weeklyReportIntervalId = setInterval(() => {
-        if (client.isReady?.()) {
-          postErrorReport(client).catch(async (error) => {
-            await logError('Error posting weekly error report', error);
-          });
-        }
-      }, WEEKLY_REPORT_INTERVAL_MS);
-    }
+    scheduleDailySummary();
   });
 }
 

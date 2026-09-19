@@ -1,185 +1,283 @@
-// Scheduled events polling and channel message management
-// Mirrors the legacy WinterBot.js scheduled event synchronization logic.
+const { getConfig } = require('../config');
+const { fetchSubscribedUsers } = require('./api');
+const { logError, logInfo, logWarn } = require('../logging/logger');
+const { getEventData, saveEvents } = require('../persistence/eventsStore');
+const { formatUserDisplay } = require('./display');
+const { getGuildOrThrow, getTextChannelOrThrow, resolveGuildMember } = require('./guildResources');
 
-const { getConfig } = require('../config/index.js');
-const { fetchSubscribedUsers } = require('./api.js');
-const { logError, logInfo } = require('../logging/logger.js');
-const { getEventData, saveEvents } = require('../persistence/eventsStore.js');
+function getStatusLabel(status) {
+  if (status === 2) return '(currently happening)';
+  if (status === 3) return '(past event)';
+  if (status === 4) return '(canceled)';
+  return '(upcoming)';
+}
 
-const eventMessages = {};
+function toSubscriberRecord(rawUser, previousRecord = null) {
+  const userId = String(rawUser?.user?.id || previousRecord?.userId || '');
+  const username = String(rawUser?.user?.username || previousRecord?.lastKnownUsername || userId);
+  const displayName = String(
+    rawUser?.member?.nick ||
+    rawUser?.member?.display_name ||
+    previousRecord?.lastKnownDisplayName ||
+    username
+  );
 
-function startScheduledEventLoop(client) {
+  return {
+    userId,
+    lastKnownUsername: username,
+    lastKnownDisplayName: displayName,
+    timestamp: previousRecord?.timestamp || Date.now(),
+    apiCheckCounter: 0,
+  };
+}
+
+async function renderEventContent(guild, eventRecord, config) {
+  const lines = [`${eventRecord.eventMessage}${eventRecord.eventStatus}:`];
+  let count = 1;
+
+  const subscribedUsers = Object.values(eventRecord.subscribedUsers || {}).sort(
+    (left, right) => left.timestamp - right.timestamp
+  );
+
+  for (const record of subscribedUsers) {
+    const member = await resolveGuildMember(guild, record.userId);
+    if (member) {
+      record.lastKnownUsername = member.user.username;
+      record.lastKnownDisplayName = member.displayName;
+    }
+    lines.push(`${count}. ${formatUserDisplay({ member, record, mode: config.userDisplayMode })}`);
+    count += 1;
+  }
+
+  const unsubscribedUsers = Object.values(eventRecord.unsubscribedUsers || {});
+  if (unsubscribedUsers.length > 0) {
+    const formatted = [];
+    for (const record of unsubscribedUsers) {
+      const member = await resolveGuildMember(guild, record.userId);
+      if (member) {
+        record.lastKnownUsername = member.user.username;
+        record.lastKnownDisplayName = member.displayName;
+      }
+      formatted.push(formatUserDisplay({ member, record, mode: config.userDisplayMode }));
+    }
+    lines.push('');
+    lines.push(`Deregistered players: ${formatted.join(', ')}`);
+  }
+
+  return lines.join('\n');
+}
+
+async function upsertEventMessage(channel, eventRecord, content) {
+  if (eventRecord.messageId) {
+    try {
+      const message = await channel.messages.fetch(eventRecord.messageId);
+      if (message.content !== content) {
+        await message.edit(content);
+      }
+      return message;
+    } catch (_) {}
+  }
+
+  const message = await channel.send(content);
+  eventRecord.messageId = message.id;
+  return message;
+}
+
+async function reconcileRemovedEvents(guild, channel, eventData, fetchedEventIds, config) {
+  let changed = false;
+
+  for (const [eventId, eventRecord] of Object.entries(eventData)) {
+    if (fetchedEventIds.has(eventId)) continue;
+
+    eventRecord.eventStatus = '(past event)';
+    const content = await renderEventContent(guild, eventRecord, config);
+    await upsertEventMessage(channel, eventRecord, content);
+    delete eventData[eventId];
+    changed = true;
+
+    logInfo(`Marked removed event ${eventId} as past and removed from active tracking.`, {
+      source: 'scheduledEvents',
+      eventId,
+    });
+  }
+
+  return changed;
+}
+
+async function reconcileSingleEvent(guild, channel, event, eventData, config) {
+  const eventId = event.id;
+  const statusLabel = getStatusLabel(event.status);
+
+  const record = eventData[eventId] || {
+    eventName: event.name,
+    eventMessage: `**Registered players for ${event.name}** `,
+    eventStatus: statusLabel,
+    messageId: '',
+    subscribedUsers: {},
+    unsubscribedUsers: {},
+  };
+
+  let changed = !eventData[eventId];
+  eventData[eventId] = record;
+
+  if (record.eventName !== event.name) {
+    record.eventName = event.name;
+    record.eventMessage = `**Registered players for ${event.name}** `;
+    changed = true;
+  }
+
+  if (record.eventStatus !== statusLabel) {
+    logInfo(`Event ${eventId} "${event.name}" status changed to ${statusLabel}.`, {
+      source: 'scheduledEvents',
+      eventId,
+      eventStatus: statusLabel,
+    });
+    record.eventStatus = statusLabel;
+    changed = true;
+  }
+
+  let fetchFailed = false;
+  let rawUsers = [];
+
+  try {
+    rawUsers = await fetchSubscribedUsers(config.guildId, eventId);
+  } catch (error) {
+    fetchFailed = true;
+    await logError('scheduledEvents.fetchSubscribedUsers', error, {
+      eventId,
+      eventName: event.name,
+    });
+  }
+
+  if (!fetchFailed) {
+    const currentUsersById = new Map();
+    for (const rawUser of rawUsers) {
+      if (!rawUser?.user?.id) continue;
+      currentUsersById.set(String(rawUser.user.id), rawUser);
+    }
+
+    logInfo(
+      `Event ${eventId} "${event.name}": status=${event.status}, fetchedUsers=${currentUsersById.size}, storedSubscribed=${Object.keys(record.subscribedUsers).length}, storedUnsubscribed=${Object.keys(record.unsubscribedUsers).length}`,
+      { source: 'scheduledEvents', eventId }
+    );
+
+    for (const [userId, rawUser] of currentUsersById.entries()) {
+      const previousRecord = record.subscribedUsers[userId] || record.unsubscribedUsers[userId] || null;
+      const nextRecord = toSubscriberRecord(rawUser, previousRecord);
+
+      if (!record.subscribedUsers[userId]) changed = true;
+      record.subscribedUsers[userId] = nextRecord;
+      delete record.unsubscribedUsers[userId];
+    }
+
+    for (const [userId, existing] of Object.entries(record.subscribedUsers)) {
+      if (currentUsersById.has(userId)) {
+        existing.apiCheckCounter = 0;
+        continue;
+      }
+
+      existing.apiCheckCounter = Number(existing.apiCheckCounter || 0) + 1;
+
+      if (existing.apiCheckCounter < config.unsubscribeGraceCycles) {
+        logInfo(
+          `Pending removal for event ${eventId}: ${userId} apiCheckCounter=${existing.apiCheckCounter}/${config.unsubscribeGraceCycles}`,
+          { source: 'scheduledEvents', eventId, userId }
+        );
+        continue;
+      }
+
+      record.unsubscribedUsers[userId] = {
+        userId,
+        lastKnownUsername: existing.lastKnownUsername,
+        lastKnownDisplayName: existing.lastKnownDisplayName,
+        timestamp: Date.now(),
+      };
+      delete record.subscribedUsers[userId];
+      changed = true;
+    }
+  } else {
+    logWarn(
+      `Using cached subscriber state for event ${eventId} "${event.name}" because subscriber fetch failed.`,
+      { source: 'scheduledEvents', eventId }
+    );
+  }
+
+  const content = await renderEventContent(guild, record, config);
+  await upsertEventMessage(channel, record, content);
+  return changed;
+}
+
+function createScheduledEventSynchronizer(client) {
   const config = getConfig();
   const eventData = getEventData();
+  let timer = null;
+  let isRunning = false;
+  let isStarted = false;
 
-  async function updateEventMessages() {
+  async function tick() {
+    if (isRunning) return;
+    isRunning = true;
+
     try {
-      const guild = client.guilds.cache.get(config.guildId);
+      const guild = await getGuildOrThrow(client, config.guildId);
+      const channel = await getTextChannelOrThrow(client, config.channelId);
       const events = await guild.scheduledEvents.fetch();
-      logInfo(`Fetched ${events.size} ${events.size === 1 ? 'event' : 'events'}`);
 
-      const delay = events.size > 0 ? 5000 : 0;
-      const knownEventIds = Object.keys(eventData);
-      const fetchedEventIds = events.map((event) => event.id);
-      const removedEventIds = knownEventIds.filter((eventId) => !fetchedEventIds.includes(eventId));
+      logInfo(`Fetched ${events.size} scheduled event(s).`, { source: 'scheduledEvents.tick' });
 
-      for (const eventId of removedEventIds) {
-        eventData[eventId].eventStatus = '(past event)';
-        let content = `${eventData[eventId].eventMessage}${eventData[eventId].eventStatus}:\n`;
-        let count = 1;
-        Object.entries(eventData[eventId].subscribedUsers).forEach(([username]) => {
-          content += `${count}. ${username}\n`;
-          count += 1;
-        });
-
-        const unsubscribedUsernamesString = Object.keys(eventData[eventId].unsubscribedUsers).join(', ');
-
-        if (unsubscribedUsernamesString.length > 0) {
-          content += `\nDeregistered players: ${unsubscribedUsernamesString}\n`;
-        }
-
-        if (eventData[eventId].messageId) {
-          try {
-            const channel = client.channels.cache.get(config.channelId);
-            const message = await channel.messages.fetch(eventData[eventId].messageId);
-            await message.edit(content);
-          } catch (error) {
-            await logError('Error updating message', error);
-          }
-        } else if (eventMessages[eventId]) {
-          await eventMessages[eventId].edit(content);
-        }
-
-        delete eventData[eventId];
-      }
+      let changed = await reconcileRemovedEvents(
+        guild,
+        channel,
+        eventData,
+        new Set(events.map((event) => event.id)),
+        config
+      );
 
       for (const event of events.values()) {
-        const eventId = event.id;
-        logInfo(`Processing event ${eventId}: '${event.name}'`);
-
-        if (event && !event.ended) {
-          let users;
-          if (!client.subscribedUsersPromise) client.subscribedUsersPromise = {};
-          if (!client.subscribedUsersPromise[eventId]) {
-            client.subscribedUsersPromise[eventId] = fetchSubscribedUsers(config.guildId, eventId);
-          }
-          users = await client.subscribedUsersPromise[eventId];
-          delete client.subscribedUsersPromise[eventId];
-
-          let usernames = [];
-          if (Array.isArray(users)) {
-            usernames = users.map((user) => user.user.username);
-          } else {
-            await logError('Error: users is not an array', new Error(JSON.stringify(users)));
-          }
-
-          if (!eventData[eventId]) {
-            eventData[eventId] = {
-              subscribedUsers: {},
-              unsubscribedUsers: {},
-              unsubscribedTimestamps: {},
-              eventMessage: `**Registered players for ${event.name}** `,
-              eventStatus: '',
-            };
-          } else if (!eventData[eventId].unsubscribedUsers) {
-            eventData[eventId].unsubscribedUsers = {};
-          }
-
-          if (eventData[eventId].eventName !== event.name) {
-            eventData[eventId].eventName = event.name;
-            eventData[eventId].eventMessage = `**Registered players for ${event.name}** `;
-          }
-          let content = `${eventData[eventId].eventMessage}${eventData[eventId].eventStatus}**:**\n`;
-
-          usernames.forEach((username) => {
-            if (!eventData[eventId].subscribedUsers[username]) {
-              eventData[eventId].subscribedUsers[username] = {
-                timestamp: Date.now(),
-                apiCheckCounter: 0,
-              };
-            }
-            if (eventData[eventId].unsubscribedUsers[username]) {
-              delete eventData[eventId].unsubscribedUsers[username];
-            }
-          });
-
-          const previousUsernames = Object.keys(eventData[eventId].subscribedUsers);
-          const unsubscribedUsernames = previousUsernames.filter((username) => !usernames.includes(username));
-
-          unsubscribedUsernames.forEach((username) => {
-            eventData[eventId].subscribedUsers[username].apiCheckCounter += 1;
-          });
-
-          const delayApiChecks = 6;
-          unsubscribedUsernames.forEach((username) => {
-            if (eventData[eventId].subscribedUsers[username].apiCheckCounter >= delayApiChecks) {
-              delete eventData[eventId].subscribedUsers[username];
-              eventData[eventId].unsubscribedUsers[username] = Date.now();
-            }
-          });
-
-          if (event.status === 3) {
-            eventData[eventId].eventStatus = '(past event)';
-          } else if (event.status === 2) {
-            eventData[eventId].eventStatus = '(currently happening)';
-          } else {
-            eventData[eventId].eventStatus = '(upcoming)';
-          }
-
-          content = `${eventData[eventId].eventMessage}${eventData[eventId].eventStatus}:\n`;
-
-          let count = 1;
-          Object.entries(eventData[eventId].subscribedUsers).forEach(([username]) => {
-            content += `${count}. ${username}\n`;
-            count += 1;
-          });
-
-          const unsubscribedUsernamesString = Object.keys(eventData[eventId].unsubscribedUsers).join(', ');
-
-          if (unsubscribedUsernamesString.length > 0) {
-            content += `\nDeregistered players: ${unsubscribedUsernamesString}\n`;
-          }
-
-          if (eventData[eventId].messageId) {
-            try {
-              const channel = client.channels.cache.get(config.channelId);
-              const message = await channel.messages.fetch(eventData[eventId].messageId);
-              await message.edit(content);
-            } catch (error) {
-              await logError('Handled Error updating message', error);
-              const channel = client.channels.cache.get(config.channelId);
-              if (!channel) throw new Error('Channel not found');
-              const message = await channel.send(content);
-              eventMessages[eventId] = message;
-              eventData[eventId].messageId = message.id;
-            }
-          } else if (eventMessages[eventId]) {
-            await eventMessages[eventId].edit(content);
-          } else {
-            const channel = client.channels.cache.get(config.channelId);
-            if (!channel) throw new Error('Channel not found');
-            const message = await channel.send(content);
-            eventMessages[eventId] = message;
-            eventData[eventId].messageId = message.id;
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
+        changed = (await reconcileSingleEvent(guild, channel, event, eventData, config)) || changed;
       }
 
-      await saveEvents();
-      logInfo('Update completed.');
+      if (changed) {
+        await saveEvents();
+      }
     } catch (error) {
-      await logError('Handled Error in updateEventMessages', error);
+      await logError('scheduledEvents.tick', error);
     } finally {
-      setTimeout(
-        updateEventMessages,
-        Object.keys(eventData).length > 0 ? 500 : 30000
-      );
+      isRunning = false;
+      if (isStarted) {
+        const interval =
+          Object.keys(eventData).length > 0
+            ? config.activeEventPollIntervalMs
+            : config.eventPollIntervalMs;
+
+        timer = setTimeout(() => {
+          tick().catch(() => {});
+        }, interval);
+        timer.unref?.();
+      }
     }
   }
 
-  return updateEventMessages();
+  return {
+    start() {
+      if (isStarted) return;
+      isStarted = true;
+      tick().catch(() => {});
+    },
+    stop() {
+      isStarted = false;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+    tick,
+  };
 }
 
-module.exports = { startScheduledEventLoop };
+module.exports = {
+  createScheduledEventSynchronizer,
+  getStatusLabel,
+  toSubscriberRecord,
+  renderEventContent,
+};

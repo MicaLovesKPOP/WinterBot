@@ -1,117 +1,180 @@
-// Centralized logging utilities and Discord error reporting
-// Implements timestamping, log rotation, file writes, and Discord logging with cooldown/summarization.
-
 const fs = require('fs');
 const path = require('path');
-const { getConfig } = require('../config/index.js');
+const { getConfig } = require('../config');
+const { registerError, buildDailySummaryAndReset } = require('./errorRegistry');
 
-let diskFull = false;
-let lastErrorSent = 0;
-let cooldownTimer = null;
-let pendingDiscordErrors = [];
 let discordClient = null;
+let initialized = false;
 let logChannelId = null;
-let errorCooldownMs = 60 * 1000; // default fallback
-let logPath = path.join(process.cwd(), 'logs', 'error.log');
+let errorSummaryIntervalMs = 24 * 60 * 60 * 1000;
+let errorRegistryMaxSize = 500;
+let summaryTimer = null;
 
-const MAX_SIZE = 1 * 1024 * 1024; // 1 MB
+const LOG_DIR = path.join(process.cwd(), 'logs');
+const HUMAN_LOG_FILE = path.join(LOG_DIR, 'error.log');
+const STRUCTURED_LOG_FILE = path.join(LOG_DIR, 'events.jsonl');
+const MAX_SIZE = 1 * 1024 * 1024;
 const MAX_BACKUPS = 5;
-const DEFAULT_DISCORD_CHUNK_SIZE = 1900;
+const DEFAULT_CHUNK_SIZE = 1900;
+
+function ensureLogDir() {
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+}
 
 function initializeLogger() {
-  const config = getConfig();
-  logChannelId = config.logChannelId;
-  errorCooldownMs = Number(config.logCooldownMs) || errorCooldownMs;
+  if (initialized) return;
+  ensureLogDir();
 
-  const logDir = path.dirname(logPath);
   try {
-    if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
-    }
-  } catch (_) {
-    // Ignore directory creation failures; console logging remains.
-  }
+    const config = getConfig();
+    logChannelId = config.logChannelId;
+    errorSummaryIntervalMs = config.errorSummaryIntervalMs;
+    errorRegistryMaxSize = config.errorRegistryMaxSize;
+  } catch (_) {}
+
+  initialized = true;
 }
 
 function setLoggingClient(client) {
   discordClient = client;
 }
 
-function getTimestamp() {
-  const now = new Date();
-  const year = now.getFullYear().toString().slice(-2);
-  const month = (now.getMonth() + 1).toString().padStart(2, '0');
-  const day = now.getDate().toString().padStart(2, '0');
-  const hours = now.getHours().toString().padStart(2, '0');
-  const minutes = now.getMinutes().toString().padStart(2, '0');
-  const seconds = now.getSeconds().toString().padStart(2, '0');
+function getTimestamp(date = new Date()) {
+  const year = date.getFullYear().toString().slice(-2);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
   return `${year}${month}${day} ${hours}:${minutes}:${seconds}`;
 }
 
-function rotateLogs() {
+function normalizeErrorSignature(source, error) {
+  const raw = error && error.stack ? error.stack : String(error ?? 'Unknown error');
+  const firstLine = String(raw).split('\n')[0].trim();
+  return `${source} | ${firstLine}`;
+}
+
+function toErrorDetails(error) {
+  if (!error) return { message: 'Unknown error', stack: '' };
+  if (error instanceof Error) {
+    return { message: error.message || error.name || 'Error', stack: error.stack || String(error) };
+  }
+  return { message: String(error), stack: String(error) };
+}
+
+function rotateLogsIfNeeded(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const stats = fs.statSync(filePath);
+  if (stats.size < MAX_SIZE) return;
+
+  const oldest = `${filePath}.${MAX_BACKUPS}`;
+  if (fs.existsSync(oldest)) fs.unlinkSync(oldest);
+
+  for (let index = MAX_BACKUPS - 1; index >= 1; index -= 1) {
+    const from = `${filePath}.${index}`;
+    const to = `${filePath}.${index + 1}`;
+    if (fs.existsSync(from)) fs.renameSync(from, to);
+  }
+
+  fs.renameSync(filePath, `${filePath}.1`);
+}
+
+function appendFileSafely(filePath, content) {
+  ensureLogDir();
+
   try {
-    if (!fs.existsSync(logPath)) return;
-    const stats = fs.statSync(logPath);
-    if (stats.size < MAX_SIZE) return;
-
-    const oldest = `${logPath}.${MAX_BACKUPS}`;
-    if (fs.existsSync(oldest)) fs.unlinkSync(oldest);
-
-    for (let i = MAX_BACKUPS - 1; i >= 1; i--) {
-      const src = `${logPath}.${i}`;
-      const dest = `${logPath}.${i + 1}`;
-      if (fs.existsSync(src)) fs.renameSync(src, dest);
-    }
-
-    fs.renameSync(logPath, `${logPath}.1`);
-  } catch (err) {
+    rotateLogsIfNeeded(filePath);
+    fs.appendFileSync(filePath, content, 'utf8');
+    return true;
+  } catch (error) {
     try {
-      console.error(`[${getTimestamp()}] rotateLogs failed: ${err && err.message ? err.message : err}`);
-    } catch (_) {
-      // Swallow logging failures.
-    }
+      console.error(`[${getTimestamp()}] File log write failed: ${error && error.stack ? error.stack : error}`);
+    } catch (_) {}
+    return false;
   }
 }
 
-function safeWriteError(message) {
-  try { console.error(message); } catch (_) {}
+function writeStructuredEntry(entry) {
+  appendFileSafely(STRUCTURED_LOG_FILE, `${JSON.stringify(entry)}\n`);
+}
 
-  if (diskFull) return;
+function writeHumanEntry(entry) {
+  appendFileSafely(
+    HUMAN_LOG_FILE,
+    `[${entry.timestamp}] [${entry.level.toUpperCase()}] [${entry.source}] ${entry.message}\n`
+  );
+}
+
+function createLogEntry(level, source, message, metadata = {}) {
+  return {
+    timestamp: getTimestamp(),
+    isoTimestamp: new Date().toISOString(),
+    level,
+    source,
+    message,
+    metadata,
+  };
+}
+
+function recordEntry(entry) {
+  initializeLogger();
 
   try {
-    rotateLogs();
-    fs.appendFileSync(logPath, message + '\n', 'utf8');
-  } catch (err) {
-    if (err && err.code === 'ENOSPC') {
-      diskFull = true;
-      try { console.error(`[${getTimestamp()}] Disk full detected; disabling file logging.`); } catch (_) {}
-    } else {
-      try {
-        console.error(`[${getTimestamp()}] safeWriteError failed: ${err && err.stack ? err.stack : err}`);
-      } catch (_) {}
-    }
+    const printable = `[${entry.timestamp}] [${entry.level.toUpperCase()}] [${entry.source}] ${entry.message}`;
+    if (entry.level === 'error' || entry.level === 'fatal') console.error(printable);
+    else console.log(printable);
+  } catch (_) {}
+
+  writeStructuredEntry(entry);
+
+  if (entry.level === 'error' || entry.level === 'fatal' || entry.level === 'warn') {
+    writeHumanEntry(entry);
   }
+
+  return entry;
 }
 
-function splitMessageIntoChunks(message, chunkSize = DEFAULT_DISCORD_CHUNK_SIZE) {
-  const chunks = [];
-  let remaining = message;
+function splitMessageIntoChunks(message, chunkSize = DEFAULT_CHUNK_SIZE) {
+  if (message.length <= chunkSize) return [message];
 
-  while (remaining.length > chunkSize) {
-    const chunk = remaining.substring(0, chunkSize);
-    chunks.push(chunk);
-    remaining = remaining.substring(chunkSize);
+  const lines = message.split('\n');
+  const chunks = [];
+  let current = '';
+
+  for (const line of lines) {
+    const candidate = current ? `${current}\n${line}` : line;
+    if (candidate.length <= chunkSize) {
+      current = candidate;
+      continue;
+    }
+
+    if (current) {
+      chunks.push(current);
+      current = '';
+    }
+
+    if (line.length <= chunkSize) {
+      current = line;
+      continue;
+    }
+
+    let remaining = line;
+    while (remaining.length > chunkSize) {
+      chunks.push(remaining.slice(0, chunkSize));
+      remaining = remaining.slice(chunkSize);
+    }
+    current = remaining;
   }
 
-  chunks.push(remaining);
+  if (current) chunks.push(current);
   return chunks;
 }
 
 function getDiscordLogChannel() {
   try {
     if (!discordClient || !discordClient.isReady?.()) return null;
-    const channel = discordClient.channels.cache.get(logChannelId);
-    return channel || null;
+    return discordClient.channels.cache.get(logChannelId) || null;
   } catch (_) {
     return null;
   }
@@ -119,80 +182,87 @@ function getDiscordLogChannel() {
 
 async function sendToDiscord(message) {
   const channel = getDiscordLogChannel();
-  if (!channel) return;
+  if (!channel) return false;
 
   const chunks = splitMessageIntoChunks(message);
-  for (const chunk of chunks) {
+  for (let index = 0; index < chunks.length; index += 1) {
+    const prefix = chunks.length > 1 ? `[${index + 1}/${chunks.length}]\n` : '';
     try {
-      // eslint-disable-next-line no-await-in-loop
-      await channel.send(chunk);
+      await channel.send(`${prefix}${chunks[index]}`);
     } catch (_) {
-      // Ignore Discord send errors.
+      return false;
     }
   }
+
+  return true;
 }
 
-async function flushQueuedErrors() {
-  const queued = pendingDiscordErrors;
-  pendingDiscordErrors = [];
-  cooldownTimer = null;
-
-  if (!queued.length) return;
-
-  const summaryHeader = `⚠️ ${queued.length} error(s) occurred during the logging cooldown.`;
-  const firstError = queued[0];
-  const lastError = queued[queued.length - 1];
-  const summaryBody = queued.length === 1
-    ? `Last error: ${firstError}`
-    : `First error: ${firstError}\nLast error: ${lastError}`;
-  await sendToDiscord(`${summaryHeader}\n${summaryBody}`);
-
-  lastErrorSent = Date.now();
+function logDebug(message, metadata = {}) {
+  return recordEntry(createLogEntry('debug', metadata.source || 'app', message, metadata));
 }
 
-async function logError(prefix, err) {
-  const ts = getTimestamp();
-  const details = err && err.stack ? err.stack : err;
-  const message = `[${ts}] ${prefix}: ${details}`;
+function logInfo(message, metadata = {}) {
+  return recordEntry(createLogEntry('info', metadata.source || 'app', message, metadata));
+}
 
-  safeWriteError(message);
+function logWarn(message, metadata = {}) {
+  return recordEntry(createLogEntry('warn', metadata.source || 'app', message, metadata));
+}
 
-  const now = Date.now();
-  const elapsed = now - lastErrorSent;
+async function logError(source, error, metadata = {}) {
+  const details = toErrorDetails(error);
+  const signature = normalizeErrorSignature(source, error);
 
-  if (elapsed >= errorCooldownMs) {
-    if (pendingDiscordErrors.length) {
-      await flushQueuedErrors();
+  const entry = recordEntry(createLogEntry('error', source, details.message, {
+    ...metadata,
+    signature,
+    stack: details.stack,
+  }));
+
+  const registration = registerError({
+    source,
+    message: details.message,
+    metadata,
+    timestamp: Date.now(),
+    maxSize: errorRegistryMaxSize,
+  });
+
+  if (registration.isFirstOccurrence) {
+    await sendToDiscord(`⚠️ ${source}: ${details.message}`);
+  }
+
+  return entry;
+}
+
+function scheduleDailySummary() {
+  if (summaryTimer) return;
+  summaryTimer = setInterval(async () => {
+    const summary = buildDailySummaryAndReset();
+    if (summary) {
+      await sendToDiscord(summary);
     }
-    await sendToDiscord(message);
-    lastErrorSent = Date.now();
-    return;
-  }
-
-  pendingDiscordErrors.push(message);
-
-  if (!cooldownTimer) {
-    const remaining = Math.max(errorCooldownMs - elapsed, 0);
-    cooldownTimer = setTimeout(() => {
-      flushQueuedErrors();
-    }, remaining);
-  }
+  }, errorSummaryIntervalMs);
+  summaryTimer.unref?.();
 }
 
-function logInfo(message) {
-  try {
-    console.log(`[${getTimestamp()}] ${message}`);
-  } catch (_) {
-    // Ignore logging failures.
-  }
+function getLogPaths() {
+  return {
+    humanLogFile: HUMAN_LOG_FILE,
+    structuredLogFile: STRUCTURED_LOG_FILE,
+  };
 }
 
 module.exports = {
   initializeLogger,
   setLoggingClient,
-  logError,
+  logDebug,
   logInfo,
-  safeWriteError,
-  splitMessageIntoChunks,
+  logWarn,
+  logError,
+  sendToDiscord,
+  scheduleDailySummary,
   getTimestamp,
+  splitMessageIntoChunks,
+  getLogPaths,
+  normalizeErrorSignature,
 };

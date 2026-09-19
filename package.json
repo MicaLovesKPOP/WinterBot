@@ -1,13 +1,14 @@
 {
-  "name": "package.json",
-  "version": "1.0.0",
-  "description": "",
+  "name": "winterbot",
+  "version": "2.4.2",
+  "description": "Discord scheduled-event registration tracker bot",
   "main": "WinterBot.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node WinterBot.js",
+    "test": "node --test"
   },
   "author": "",
-  "license": "ISC",
+  "license": "GPL-3.0",
   "dependencies": {
     "discord.js": "^14.11.0",
     "dotenv": "^16.0.3",

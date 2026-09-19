@@ -1,71 +1,119 @@
-// Version tracking based on WinterBot.js modification time.
-// Preserves original behaviour of auto-incrementing the patch version when the
-// entry file's mtime changes, storing the current version and last mtime in
-// version.txt.
-
 const fs = require('fs');
 const path = require('path');
 
-const versionFile = path.resolve(__dirname, '..', '..', 'version.txt');
-const botFile = path.resolve(__dirname, '..', '..', 'WinterBot.js');
+const packageFile = path.resolve(__dirname, '..', '..', 'package.json');
+const stateFile = path.resolve(__dirname, '..', '..', '.versionState.json');
 
-let botVersion = '1.0.0';
-let lastBotMTime = 0;
+let cachedVersion = '0.0.0';
 let initialized = false;
 
-function applyVersionCheck() {
-  try {
-    if (fs.existsSync(versionFile)) {
-      const saved = fs.readFileSync(versionFile, 'utf8').split(',');
-      if (saved.length === 2) {
-        botVersion = saved[0];
-        lastBotMTime = Number(saved[1]) || 0;
-      }
+function getAllJsFiles(dir, collected = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      if (['node_modules', '.git', 'logs'].includes(entry.name)) continue;
+      getAllJsFiles(fullPath, collected);
+      continue;
     }
 
-    const stats = fs.statSync(botFile);
-    const mtimeMs = stats.mtimeMs;
-
-    if (mtimeMs > lastBotMTime) {
-      const parts = botVersion.split('.').map(Number);
-      if (parts.length === 3) {
-        parts[2] += 1;
-        botVersion = parts.join('.');
-      } else {
-        botVersion += '.0.1';
-      }
-      try {
-        fs.writeFileSync(versionFile, `${botVersion},${mtimeMs}`, 'utf8');
-        lastBotMTime = mtimeMs;
-      } catch (_) {}
+    if (entry.isFile() && entry.name.endsWith('.js')) {
+      const stats = fs.statSync(fullPath);
+      collected.push({
+        path: fullPath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+      });
     }
-  } catch (err) {
-    try {
-      console.error('Version-check failed:', err && err.message ? err.message : err);
-    } catch (_) {}
   }
 
-  return { version: botVersion, lastModified: lastBotMTime };
+  return collected;
+}
+
+function buildSignature(baseDir) {
+  const files = getAllJsFiles(baseDir).sort((left, right) => left.path.localeCompare(right.path));
+  const signature = files.map((file) => `${file.path}:${file.size}:${file.mtimeMs}`).join('|');
+  return {
+    signature,
+    fileCount: files.length,
+  };
+}
+
+function readPackageJson() {
+  try {
+    const raw = fs.readFileSync(packageFile, 'utf8');
+    return JSON.parse(raw);
+  } catch (_) {
+    return { name: 'winterbot', version: '0.0.0' };
+  }
+}
+
+function writePackageJson(pkg) {
+  fs.writeFileSync(packageFile, JSON.stringify(pkg, null, 2), 'utf8');
+}
+
+function readState() {
+  try {
+    const raw = fs.readFileSync(stateFile, 'utf8');
+    return JSON.parse(raw);
+  } catch (_) {
+    return { signature: '', fileCount: 0 };
+  }
+}
+
+function writeState(state) {
+  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
+}
+
+function bumpVersion(currentVersion, bumpType = 'patch') {
+  let [major, minor, patch] = String(currentVersion || '0.0.0')
+    .split('.')
+    .map((value) => Number.parseInt(value, 10) || 0);
+
+  if (bumpType === 'minor') {
+    minor += 1;
+    patch = 0;
+  } else {
+    patch += 1;
+  }
+
+  return `${major}.${minor}.${patch}`;
 }
 
 function initializeVersionTracker() {
-  if (initialized) {
-    return { version: botVersion, lastModified: lastBotMTime };
+  if (initialized) return { version: cachedVersion };
+
+  const pkg = readPackageJson();
+  const previousState = readState();
+  const currentState = buildSignature(path.resolve(__dirname, '..', '..'));
+
+  if (!pkg.version) {
+    pkg.version = '0.0.0';
   }
+
+if (!previousState.signature) {
+  pkg.version = bumpVersion(pkg.version, 'patch');
+  writePackageJson(pkg);
+  writeState(currentState);
+  cachedVersion = String(pkg.version);
   initialized = true;
-  return applyVersionCheck();
+  return { version: cachedVersion };
 }
 
-function updateVersionIfNeeded() {
-  return applyVersionCheck();
+  if (currentState.signature !== previousState.signature) {
+    const bumpType = currentState.fileCount !== previousState.fileCount ? 'minor' : 'patch';
+    pkg.version = bumpVersion(pkg.version, bumpType);
+    writePackageJson(pkg);
+    writeState(currentState);
+  }
+
+  cachedVersion = String(pkg.version);
+  initialized = true;
+  return { version: cachedVersion };
 }
 
 function getVersion() {
-  return botVersion;
+  return cachedVersion;
 }
 
-module.exports = {
-  initializeVersionTracker,
-  updateVersionIfNeeded,
-  getVersion,
-};
+module.exports = { initializeVersionTracker, getVersion };
