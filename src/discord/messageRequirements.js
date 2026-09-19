@@ -137,6 +137,17 @@ function hostnameMatches(hostname, domain, allowSubdomains) {
   return allowSubdomains && hostname.endsWith(`.${domain}`);
 }
 
+function pathMatchesPrefix(pathname, prefix) {
+  const normalizedPrefix = prefix.endsWith('/') && prefix.length > 1
+    ? prefix.slice(0, -1)
+    : prefix;
+
+  return (
+    pathname === normalizedPrefix ||
+    pathname.startsWith(`${normalizedPrefix}/`)
+  );
+}
+
 function urlMatchesRequiredLinkRule(rawUrl, rule) {
   let parsed;
 
@@ -155,7 +166,9 @@ function urlMatchesRequiredLinkRule(rawUrl, rule) {
 
   if (
     rule.pathPrefixes.length > 0 &&
-    !rule.pathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))
+    !rule.pathPrefixes.some((prefix) =>
+      pathMatchesPrefix(parsed.pathname, prefix)
+    )
   ) {
     return false;
   }
@@ -169,10 +182,11 @@ function urlMatchesRequiredLinkRule(rawUrl, rule) {
   return true;
 }
 
-function describeRequiredLinkRule(rule) {
+function describeRequiredLinkRule(rule, count = 1) {
   const domainText = rule.domains.join(' or ');
-  if (rule.pathPrefixes.length === 0) return `a link to ${domainText}`;
-  return `a matching link to ${domainText}`;
+  const noun = count === 1 ? 'link' : 'links';
+  const qualifier = rule.pathPrefixes.length === 0 ? '' : 'matching ';
+  return `${qualifier}${noun} to ${domainText}`;
 }
 
 function evaluateRequiredLink(message, rule) {
@@ -180,9 +194,13 @@ function evaluateRequiredLink(message, rule) {
   const matches = urls.filter((url) => urlMatchesRequiredLinkRule(url, rule));
 
   if (matches.length < rule.minMatches) {
+    const description = describeRequiredLinkRule(rule, rule.minMatches);
     return {
       allowed: false,
-      reason: `requires at least ${rule.minMatches} ${describeRequiredLinkRule(rule)}`,
+      reason:
+        rule.minMatches === 1
+          ? `requires a ${description}`
+          : `requires at least ${rule.minMatches} ${description}`,
     };
   }
 
@@ -373,6 +391,7 @@ module.exports = {
   isMediaAttachment,
   isMediaEmbed,
   urlMatchesRequiredLinkRule,
+  pathMatchesPrefix,
   evaluateMediaOnly,
   evaluateRequiredLink,
   evaluateMessageRequirements,

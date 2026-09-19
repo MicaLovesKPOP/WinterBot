@@ -1,25 +1,54 @@
-const nodeFetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { getConfig } = require('../config');
 const { logWarn } = require('../logging/logger');
 
-async function getFetchImplementation() {
-  if (typeof fetch === 'function') return fetch;
-  return nodeFetch;
-}
+const MAX_PAGES = 1000;
 
 function withJitter(delayMs) {
-  const jitter = Math.floor(Math.random() * Math.min(250, delayMs * 0.25));
+  const jitter = Math.floor(
+    Math.random() * Math.min(250, delayMs * 0.25)
+  );
   return delayMs + jitter;
+}
+
+function getFetchImplementation() {
+  if (typeof globalThis.fetch !== 'function') {
+    throw new Error(
+      'WinterBot requires a Node.js runtime with the built-in fetch API.'
+    );
+  }
+  return globalThis.fetch;
+}
+
+async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+
+  try {
+    return await fetchImpl(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function fetchSubscribedUsers(guildId, eventId) {
   const config = getConfig();
-  const fetchImpl = await getFetchImplementation();
+  const fetchImpl = getFetchImplementation();
   const users = [];
-  let after = null;
+  const seenCursors = new Set();
 
-  while (true) {
-    const url = new URL(`https://discord.com/api/v10/guilds/${guildId}/scheduled-events/${eventId}/users`);
+  let after = null;
+  let page = 0;
+
+  while (page < MAX_PAGES) {
+    page += 1;
+
+    const url = new URL(
+      `https://discord.com/api/v10/guilds/${guildId}/scheduled-events/${eventId}/users`
+    );
     url.searchParams.set('limit', '100');
     if (after) url.searchParams.set('after', after);
 
@@ -28,21 +57,34 @@ async function fetchSubscribedUsers(guildId, eventId) {
 
     while (attempt <= config.maxApiRetries) {
       try {
-        response = await fetchImpl(url.toString(), {
-          headers: {
-            Authorization: `Bot ${config.botToken}`,
-            'Content-Type': 'application/json',
+        response = await fetchWithTimeout(
+          fetchImpl,
+          url.toString(),
+          {
+            headers: {
+              Authorization: `Bot ${config.botToken}`,
+              'Content-Type': 'application/json',
+            },
           },
-        });
+          config.apiRequestTimeoutMs
+        );
 
         if (response.status === 429) {
           const retryAfterHeader = response.headers.get('retry-after');
-          const retryAfterSeconds = Number.parseFloat(retryAfterHeader || '1');
-          const waitMs = Math.max(250, Math.ceil(retryAfterSeconds * 1000));
-          logWarn(`Rate limited while fetching subscribers for event ${eventId}; retrying in ${waitMs}ms.`, {
-            source: 'discord.api',
-            eventId,
-          });
+          const retryAfterSeconds = Number.parseFloat(
+            retryAfterHeader || '1'
+          );
+          const waitMs = Math.max(
+            250,
+            Math.ceil(retryAfterSeconds * 1000)
+          );
+
+          logWarn(
+            `Rate limited while fetching subscribers for event ${eventId}; retrying in ${waitMs}ms.`,
+            { source: 'discord.api', eventId }
+          );
+
+          if (attempt >= config.maxApiRetries) break;
           await new Promise((resolve) => setTimeout(resolve, waitMs));
           attempt += 1;
           continue;
@@ -50,7 +92,9 @@ async function fetchSubscribedUsers(guildId, eventId) {
 
         if (response.status >= 500) {
           if (attempt >= config.maxApiRetries) break;
-          const delayMs = withJitter(config.retryBaseDelayMs * (2 ** attempt));
+          const delayMs = withJitter(
+            config.retryBaseDelayMs * 2 ** attempt
+          );
           await new Promise((resolve) => setTimeout(resolve, delayMs));
           attempt += 1;
           continue;
@@ -61,15 +105,22 @@ async function fetchSubscribedUsers(guildId, eventId) {
         if (attempt >= config.maxApiRetries) {
           throw error;
         }
-        const delayMs = withJitter(config.retryBaseDelayMs * (2 ** attempt));
+
+        const delayMs = withJitter(
+          config.retryBaseDelayMs * 2 ** attempt
+        );
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         attempt += 1;
       }
     }
 
     if (!response || !response.ok) {
-      const body = response ? await response.text().catch(() => '') : '';
-      throw new Error(`HTTP ${response ? response.status : 'unknown'} ${body}`.trim());
+      const body = response
+        ? await response.text().catch(() => '')
+        : '';
+      throw new Error(
+        `HTTP ${response ? response.status : 'unknown'} ${body}`.trim()
+      );
     }
 
     const payload = await response.json();
@@ -78,13 +129,29 @@ async function fetchSubscribedUsers(guildId, eventId) {
     }
 
     users.push(...payload);
-    if (payload.length < 100) break;
+    if (payload.length < 100) return users;
 
-    after = payload[payload.length - 1]?.user?.id;
-    if (!after) break;
+    const nextAfter = String(
+      payload[payload.length - 1]?.user?.id || ''
+    );
+    if (!nextAfter) return users;
+
+    if (seenCursors.has(nextAfter)) {
+      throw new Error(
+        `Subscriber pagination repeated cursor ${nextAfter} for event ${eventId}.`
+      );
+    }
+
+    seenCursors.add(nextAfter);
+    after = nextAfter;
   }
 
-  return users;
+  throw new Error(
+    `Subscriber pagination exceeded ${MAX_PAGES} pages for event ${eventId}.`
+  );
 }
 
-module.exports = { fetchSubscribedUsers };
+module.exports = {
+  fetchSubscribedUsers,
+  fetchWithTimeout,
+};

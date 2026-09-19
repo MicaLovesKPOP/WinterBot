@@ -1,31 +1,10 @@
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { getConfig } = require('../config');
 const { logError } = require('../logging/logger');
-const { saveUptime } = require('../persistence/uptimeStore');
-const { saveEvents } = require('../persistence/eventsStore');
 
 let discordClient = null;
-let handlersRegistered = false;
 
-function registerProcessHandlers() {
-  if (handlersRegistered) return;
-
-  process.on('unhandledRejection', async (reason) => {
-    await saveUptime(discordClient).catch(() => {});
-    await saveEvents().catch(() => {});
-    await logError('process.unhandledRejection', reason);
-  });
-
-  process.on('uncaughtException', async (error) => {
-    await saveUptime(discordClient).catch(() => {});
-    await saveEvents().catch(() => {});
-    await logError('process.uncaughtException', error);
-  });
-
-  handlersRegistered = true;
-}
-
-async function createDiscordClient() {
+function createDiscordClient() {
   if (discordClient) return discordClient;
 
   const config = getConfig();
@@ -37,21 +16,38 @@ async function createDiscordClient() {
     partials.push(Partials.Message);
   }
 
-  discordClient = new Client({ intents, partials });
-  registerProcessHandlers();
+  discordClient = new Client({
+    intents,
+    partials,
+    allowedMentions: {
+      parse: [],
+      repliedUser: false,
+    },
+  });
+
+  return discordClient;
+}
+
+async function loginDiscordClient(client = discordClient) {
+  if (!client) {
+    throw new Error('Discord client has not been created.');
+  }
 
   try {
-    await discordClient.login(config.botToken);
+    await client.login(getConfig().botToken);
+    return client;
   } catch (error) {
     await logError('discordClient.login', error);
     throw error;
   }
-
-  return discordClient;
 }
 
 function getDiscordClient() {
   return discordClient;
 }
 
-module.exports = { createDiscordClient, getDiscordClient };
+module.exports = {
+  createDiscordClient,
+  loginDiscordClient,
+  getDiscordClient,
+};

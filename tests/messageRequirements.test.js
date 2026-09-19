@@ -279,3 +279,35 @@ test('requiredLink supports domain-only requirements without path/query constrai
     true
   );
 });
+
+test('requiredLink path prefixes require a real path boundary', () => {
+  const rule = workshopRule();
+
+  assert.equal(
+    urlMatchesRequiredLinkRule(
+      'https://steamcommunity.com/sharedfiles/filedetails-not-real?id=123',
+      rule
+    ),
+    false
+  );
+
+  assert.equal(
+    urlMatchesRequiredLinkRule(
+      'https://steamcommunity.com/sharedfiles/filedetails/extra?id=123',
+      rule
+    ),
+    true
+  );
+});
+
+test('requiredLink produces natural singular failure text', () => {
+  const result = evaluateRequiredLink(
+    makeMessage({ content: 'hello' }),
+    workshopRule()
+  );
+
+  assert.equal(
+    result.reason,
+    'requires a matching link to steamcommunity.com'
+  );
+});

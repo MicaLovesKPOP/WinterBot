@@ -1,19 +1,30 @@
+const { escapeMarkdown } = require('discord.js');
 const { USER_DISPLAY_MODES } = require('../config');
 
-function formatUserDisplay({ member = null, record = null, mode = USER_DISPLAY_MODES.BOTH }) {
-  const displayName =
-    member?.displayName ||
-    record?.lastKnownDisplayName ||
-    record?.lastKnownUsername ||
-    record?.userId ||
-    'Unknown user';
+function sanitizeDisplayText(value) {
+  return escapeMarkdown(String(value || 'Unknown user'));
+}
 
-  const username =
+function formatUserDisplay({
+  member = null,
+  record = null,
+  mode = USER_DISPLAY_MODES.BOTH,
+}) {
+  const displayName = sanitizeDisplayText(
+    member?.displayName ||
+      record?.lastKnownDisplayName ||
+      record?.lastKnownUsername ||
+      record?.userId ||
+      'Unknown user'
+  );
+
+  const username = sanitizeDisplayText(
     member?.user?.username ||
-    record?.lastKnownUsername ||
-    record?.lastKnownDisplayName ||
-    record?.userId ||
-    'Unknown user';
+      record?.lastKnownUsername ||
+      record?.lastKnownDisplayName ||
+      record?.userId ||
+      'Unknown user'
+  );
 
   if (mode === USER_DISPLAY_MODES.DISPLAY_NAME) return displayName;
   if (mode === USER_DISPLAY_MODES.USERNAME) return username;
@@ -21,4 +32,7 @@ function formatUserDisplay({ member = null, record = null, mode = USER_DISPLAY_M
   return `${displayName} (${username})`;
 }
 
-module.exports = { formatUserDisplay };
+module.exports = {
+  formatUserDisplay,
+  sanitizeDisplayText,
+};

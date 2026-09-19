@@ -1,17 +1,18 @@
 # Node
 node_modules/
 npm-debug.log*
-package-lock.json*
 
 # Environment / secrets
 .env
 message-requirements.json
+uptime-repair.json
 
 # Logs
 logs/
 *.log
 
 # Auto-generated bot data
+.versionState.json
 uptimeData.json
 uptimeData.json.tmp
 data.json
@@ -20,6 +21,7 @@ data.json
 *.tmp
 *.bak
 _bkp/
+_backup_before_*/
 error.log
 
 # OS / editor junk

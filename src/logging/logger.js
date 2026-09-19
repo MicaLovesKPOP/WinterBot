@@ -1,13 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 const { getConfig } = require('../config');
-const { registerError, buildDailySummaryAndReset } = require('./errorRegistry');
+const { registerError, buildDailySummary, clearErrorRegistry } = require('./errorRegistry');
 
 let discordClient = null;
 let initialized = false;
 let logChannelId = null;
 let errorSummaryIntervalMs = 24 * 60 * 60 * 1000;
 let errorRegistryMaxSize = 500;
+let debugLoggingEnabled = false;
 let summaryTimer = null;
 
 const LOG_DIR = path.join(process.cwd(), 'logs');
@@ -30,6 +31,7 @@ function initializeLogger() {
     logChannelId = config.logChannelId;
     errorSummaryIntervalMs = config.errorSummaryIntervalMs;
     errorRegistryMaxSize = config.errorRegistryMaxSize;
+    debugLoggingEnabled = config.debugLoggingEnabled;
   } catch (_) {}
 
   initialized = true;
@@ -198,6 +200,7 @@ async function sendToDiscord(message) {
 }
 
 function logDebug(message, metadata = {}) {
+  if (!debugLoggingEnabled) return null;
   return recordEntry(createLogEntry('debug', metadata.source || 'app', message, metadata));
 }
 
@@ -237,12 +240,25 @@ async function logError(source, error, metadata = {}) {
 function scheduleDailySummary() {
   if (summaryTimer) return;
   summaryTimer = setInterval(async () => {
-    const summary = buildDailySummaryAndReset();
-    if (summary) {
-      await sendToDiscord(summary);
+    const summary = buildDailySummary();
+    if (!summary) return;
+
+    const sent = await sendToDiscord(summary);
+    if (sent) {
+      clearErrorRegistry();
+    } else {
+      logWarn('Daily error summary could not be delivered; keeping it for the next attempt.', {
+        source: 'logger.dailySummary',
+      });
     }
   }, errorSummaryIntervalMs);
   summaryTimer.unref?.();
+}
+
+function stopDailySummary() {
+  if (!summaryTimer) return;
+  clearInterval(summaryTimer);
+  summaryTimer = null;
 }
 
 function getLogPaths() {
@@ -261,6 +277,7 @@ module.exports = {
   logError,
   sendToDiscord,
   scheduleDailySummary,
+  stopDailySummary,
   getTimestamp,
   splitMessageIntoChunks,
   getLogPaths,

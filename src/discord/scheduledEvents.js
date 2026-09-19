@@ -1,9 +1,21 @@
+const { escapeMarkdown } = require('discord.js');
 const { getConfig } = require('../config');
 const { fetchSubscribedUsers } = require('./api');
-const { logError, logInfo, logWarn } = require('../logging/logger');
+const {
+  logDebug,
+  logError,
+  logInfo,
+  logWarn,
+} = require('../logging/logger');
 const { getEventData, saveEvents } = require('../persistence/eventsStore');
 const { formatUserDisplay } = require('./display');
-const { getGuildOrThrow, getTextChannelOrThrow, resolveGuildMember } = require('./guildResources');
+const {
+  getGuildOrThrow,
+  getTextChannelOrThrow,
+  resolveGuildMember,
+} = require('./guildResources');
+
+const MAX_EVENT_MESSAGE_LENGTH = 1900;
 
 function getStatusLabel(status) {
   if (status === 2) return '(currently happening)';
@@ -13,13 +25,21 @@ function getStatusLabel(status) {
 }
 
 function toSubscriberRecord(rawUser, previousRecord = null) {
-  const userId = String(rawUser?.user?.id || previousRecord?.userId || '');
-  const username = String(rawUser?.user?.username || previousRecord?.lastKnownUsername || userId);
+  const userId = String(
+    rawUser?.user?.id ||
+      previousRecord?.userId ||
+      ''
+  );
+  const username = String(
+    rawUser?.user?.username ||
+      previousRecord?.lastKnownUsername ||
+      userId
+  );
   const displayName = String(
     rawUser?.member?.nick ||
-    rawUser?.member?.display_name ||
-    previousRecord?.lastKnownDisplayName ||
-    username
+      rawUser?.member?.display_name ||
+      previousRecord?.lastKnownDisplayName ||
+      username
   );
 
   return {
@@ -31,107 +51,296 @@ function toSubscriberRecord(rawUser, previousRecord = null) {
   };
 }
 
-async function renderEventContent(guild, eventRecord, config) {
-  const lines = [`${eventRecord.eventMessage}${eventRecord.eventStatus}:`];
-  let count = 1;
+function isUnknownMessageError(error) {
+  return Number(error?.code || error?.rawError?.code) === 10008;
+}
 
-  const subscribedUsers = Object.values(eventRecord.subscribedUsers || {}).sort(
+function selectContinuousSubscriberRecord(eventRecord, userId) {
+  return eventRecord.subscribedUsers?.[userId] || null;
+}
+
+function buildOverflowFooter(omittedRegistered, deregisteredCount) {
+  const lines = [];
+
+  if (omittedRegistered > 0) {
+    lines.push(
+      `… ${omittedRegistered} more registered player${omittedRegistered === 1 ? '' : 's'} not shown.`
+    );
+  }
+
+  if (deregisteredCount > 0) {
+    lines.push(
+      `Deregistered players: ${deregisteredCount} total (names omitted to fit Discord's message limit).`
+    );
+  }
+
+  return lines;
+}
+
+function fitEventContent(
+  header,
+  registeredLines,
+  deregisteredNames,
+  limit = MAX_EVENT_MESSAGE_LENGTH
+) {
+  const fullLines = [header, ...registeredLines];
+
+  if (deregisteredNames.length > 0) {
+    fullLines.push('');
+    fullLines.push(
+      `Deregistered players: ${deregisteredNames.join(', ')}`
+    );
+  }
+
+  const fullContent = fullLines.join('\n');
+  if (fullContent.length <= limit) return fullContent;
+
+  const lines = [header];
+  let includedRegistered = 0;
+
+  for (let index = 0; index < registeredLines.length; index += 1) {
+    const nextIncluded = index + 1;
+    const omittedRegistered =
+      registeredLines.length - nextIncluded;
+    const footer = buildOverflowFooter(
+      omittedRegistered,
+      deregisteredNames.length
+    );
+    const candidate = [
+      ...lines,
+      registeredLines[index],
+      ...footer,
+    ].join('\n');
+
+    if (candidate.length > limit) break;
+
+    lines.push(registeredLines[index]);
+    includedRegistered = nextIncluded;
+  }
+
+  const omittedRegistered =
+    registeredLines.length - includedRegistered;
+  const footer = buildOverflowFooter(
+    omittedRegistered,
+    deregisteredNames.length
+  );
+
+  let content = [...lines, ...footer].join('\n');
+  if (content.length <= limit) return content;
+
+  const suffix = '\n… output truncated safely.';
+  return (
+    content.slice(0, Math.max(0, limit - suffix.length)) +
+    suffix
+  );
+}
+
+async function renderEventContent(guild, eventRecord, config) {
+  const eventName = escapeMarkdown(
+    String(eventRecord.eventName || 'event')
+  );
+  const header =
+    `**Registered players for ${eventName}** ` +
+    `${eventRecord.eventStatus}:`;
+
+  const subscribedUsers = Object.values(
+    eventRecord.subscribedUsers || {}
+  ).sort(
     (left, right) => left.timestamp - right.timestamp
   );
 
+  const registeredLines = [];
+  let count = 1;
+
   for (const record of subscribedUsers) {
-    const member = await resolveGuildMember(guild, record.userId);
+    const member = await resolveGuildMember(
+      guild,
+      record.userId
+    );
+
     if (member) {
       record.lastKnownUsername = member.user.username;
       record.lastKnownDisplayName = member.displayName;
     }
-    lines.push(`${count}. ${formatUserDisplay({ member, record, mode: config.userDisplayMode })}`);
+
+    registeredLines.push(
+      `${count}. ${formatUserDisplay({
+        member,
+        record,
+        mode: config.userDisplayMode,
+      })}`
+    );
     count += 1;
   }
 
-  const unsubscribedUsers = Object.values(eventRecord.unsubscribedUsers || {});
-  if (unsubscribedUsers.length > 0) {
-    const formatted = [];
-    for (const record of unsubscribedUsers) {
-      const member = await resolveGuildMember(guild, record.userId);
-      if (member) {
-        record.lastKnownUsername = member.user.username;
-        record.lastKnownDisplayName = member.displayName;
-      }
-      formatted.push(formatUserDisplay({ member, record, mode: config.userDisplayMode }));
+  const deregisteredNames = [];
+
+  for (const record of Object.values(
+    eventRecord.unsubscribedUsers || {}
+  )) {
+    const member = await resolveGuildMember(
+      guild,
+      record.userId
+    );
+
+    if (member) {
+      record.lastKnownUsername = member.user.username;
+      record.lastKnownDisplayName = member.displayName;
     }
-    lines.push('');
-    lines.push(`Deregistered players: ${formatted.join(', ')}`);
+
+    deregisteredNames.push(
+      formatUserDisplay({
+        member,
+        record,
+        mode: config.userDisplayMode,
+      })
+    );
   }
 
-  return lines.join('\n');
+  return fitEventContent(
+    header,
+    registeredLines,
+    deregisteredNames
+  );
 }
 
-async function upsertEventMessage(channel, eventRecord, content) {
+async function upsertEventMessage(
+  channel,
+  eventRecord,
+  content
+) {
   if (eventRecord.messageId) {
     try {
-      const message = await channel.messages.fetch(eventRecord.messageId);
+      const message = await channel.messages.fetch(
+        eventRecord.messageId
+      );
+
       if (message.content !== content) {
         await message.edit(content);
       }
-      return message;
-    } catch (_) {}
+
+      return { message, created: false };
+    } catch (error) {
+      if (!isUnknownMessageError(error)) {
+        throw error;
+      }
+
+      logWarn(
+        `Tracked Discord message ${eventRecord.messageId} no longer exists; recreating it.`,
+        {
+          source: 'scheduledEvents',
+          messageId: eventRecord.messageId,
+        }
+      );
+    }
   }
 
   const message = await channel.send(content);
   eventRecord.messageId = message.id;
-  return message;
+
+  return { message, created: true };
 }
 
-async function reconcileRemovedEvents(guild, channel, eventData, fetchedEventIds, config) {
+async function reconcileRemovedEvents(
+  guild,
+  channel,
+  eventData,
+  fetchedEventIds,
+  config
+) {
   let changed = false;
 
-  for (const [eventId, eventRecord] of Object.entries(eventData)) {
+  for (const [eventId, eventRecord] of Object.entries(
+    eventData
+  )) {
     if (fetchedEventIds.has(eventId)) continue;
 
-    eventRecord.eventStatus = '(past event)';
-    const content = await renderEventContent(guild, eventRecord, config);
-    await upsertEventMessage(channel, eventRecord, content);
-    delete eventData[eventId];
+    eventRecord.missingEventPolls =
+      Number(eventRecord.missingEventPolls || 0) + 1;
     changed = true;
 
-    logInfo(`Marked removed event ${eventId} as past and removed from active tracking.`, {
-      source: 'scheduledEvents',
-      eventId,
-    });
+    if (
+      eventRecord.missingEventPolls <
+      config.missingEventGraceCycles
+    ) {
+      logDebug(
+        `Event ${eventId} absent from fetch (${eventRecord.missingEventPolls}/${config.missingEventGraceCycles}); waiting before removal.`,
+        { source: 'scheduledEvents', eventId }
+      );
+      continue;
+    }
+
+    eventRecord.eventStatus = '(past event)';
+    const content = await renderEventContent(
+      guild,
+      eventRecord,
+      config
+    );
+    await upsertEventMessage(
+      channel,
+      eventRecord,
+      content
+    );
+
+    delete eventData[eventId];
+
+    logInfo(
+      `Marked removed event ${eventId} as past after ${config.missingEventGraceCycles} consecutive missing polls.`,
+      {
+        source: 'scheduledEvents',
+        eventId,
+      }
+    );
   }
 
   return changed;
 }
 
-async function reconcileSingleEvent(guild, channel, event, eventData, config) {
+async function reconcileSingleEvent(
+  guild,
+  channel,
+  event,
+  eventData,
+  config
+) {
   const eventId = event.id;
   const statusLabel = getStatusLabel(event.status);
 
   const record = eventData[eventId] || {
     eventName: event.name,
-    eventMessage: `**Registered players for ${event.name}** `,
+    eventMessage:
+      `**Registered players for ${event.name}** `,
     eventStatus: statusLabel,
     messageId: '',
     subscribedUsers: {},
     unsubscribedUsers: {},
+    missingEventPolls: 0,
   };
 
   let changed = !eventData[eventId];
   eventData[eventId] = record;
 
+  if (record.missingEventPolls) {
+    record.missingEventPolls = 0;
+    changed = true;
+  }
+
   if (record.eventName !== event.name) {
     record.eventName = event.name;
-    record.eventMessage = `**Registered players for ${event.name}** `;
+    record.eventMessage =
+      `**Registered players for ${event.name}** `;
     changed = true;
   }
 
   if (record.eventStatus !== statusLabel) {
-    logInfo(`Event ${eventId} "${event.name}" status changed to ${statusLabel}.`, {
-      source: 'scheduledEvents',
-      eventId,
-      eventStatus: statusLabel,
-    });
+    logInfo(
+      `Event ${eventId} "${event.name}" status changed to ${statusLabel}.`,
+      {
+        source: 'scheduledEvents',
+        eventId,
+        eventStatus: statusLabel,
+      }
+    );
     record.eventStatus = statusLabel;
     changed = true;
   }
@@ -140,76 +349,128 @@ async function reconcileSingleEvent(guild, channel, event, eventData, config) {
   let rawUsers = [];
 
   try {
-    rawUsers = await fetchSubscribedUsers(config.guildId, eventId);
+    rawUsers = await fetchSubscribedUsers(
+      config.guildId,
+      eventId
+    );
   } catch (error) {
     fetchFailed = true;
-    await logError('scheduledEvents.fetchSubscribedUsers', error, {
-      eventId,
-      eventName: event.name,
-    });
+    await logError(
+      'scheduledEvents.fetchSubscribedUsers',
+      error,
+      {
+        eventId,
+        eventName: event.name,
+      }
+    );
   }
 
   if (!fetchFailed) {
     const currentUsersById = new Map();
+
     for (const rawUser of rawUsers) {
       if (!rawUser?.user?.id) continue;
-      currentUsersById.set(String(rawUser.user.id), rawUser);
+      currentUsersById.set(
+        String(rawUser.user.id),
+        rawUser
+      );
     }
 
-    logInfo(
+    logDebug(
       `Event ${eventId} "${event.name}": status=${event.status}, fetchedUsers=${currentUsersById.size}, storedSubscribed=${Object.keys(record.subscribedUsers).length}, storedUnsubscribed=${Object.keys(record.unsubscribedUsers).length}`,
       { source: 'scheduledEvents', eventId }
     );
 
     for (const [userId, rawUser] of currentUsersById.entries()) {
-      const previousRecord = record.subscribedUsers[userId] || record.unsubscribedUsers[userId] || null;
-      const nextRecord = toSubscriberRecord(rawUser, previousRecord);
+      const continuouslySubscribed =
+        selectContinuousSubscriberRecord(record, userId);
+      const wasUnsubscribed = Boolean(
+        record.unsubscribedUsers[userId]
+      );
 
-      if (!record.subscribedUsers[userId]) changed = true;
+      const nextRecord = toSubscriberRecord(
+        rawUser,
+        continuouslySubscribed
+      );
+
+      if (!continuouslySubscribed || wasUnsubscribed) {
+        changed = true;
+      }
+
       record.subscribedUsers[userId] = nextRecord;
       delete record.unsubscribedUsers[userId];
     }
 
-    for (const [userId, existing] of Object.entries(record.subscribedUsers)) {
+    for (const [userId, existing] of Object.entries(
+      record.subscribedUsers
+    )) {
       if (currentUsersById.has(userId)) {
-        existing.apiCheckCounter = 0;
+        if (existing.apiCheckCounter !== 0) {
+          existing.apiCheckCounter = 0;
+          changed = true;
+        }
         continue;
       }
 
-      existing.apiCheckCounter = Number(existing.apiCheckCounter || 0) + 1;
+      existing.apiCheckCounter =
+        Number(existing.apiCheckCounter || 0) + 1;
+      changed = true;
 
-      if (existing.apiCheckCounter < config.unsubscribeGraceCycles) {
-        logInfo(
+      if (
+        existing.apiCheckCounter <
+        config.unsubscribeGraceCycles
+      ) {
+        logDebug(
           `Pending removal for event ${eventId}: ${userId} apiCheckCounter=${existing.apiCheckCounter}/${config.unsubscribeGraceCycles}`,
-          { source: 'scheduledEvents', eventId, userId }
+          {
+            source: 'scheduledEvents',
+            eventId,
+            userId,
+          }
         );
         continue;
       }
 
       record.unsubscribedUsers[userId] = {
         userId,
-        lastKnownUsername: existing.lastKnownUsername,
-        lastKnownDisplayName: existing.lastKnownDisplayName,
+        lastKnownUsername:
+          existing.lastKnownUsername,
+        lastKnownDisplayName:
+          existing.lastKnownDisplayName,
         timestamp: Date.now(),
       };
+
       delete record.subscribedUsers[userId];
       changed = true;
     }
   } else {
     logWarn(
       `Using cached subscriber state for event ${eventId} "${event.name}" because subscriber fetch failed.`,
-      { source: 'scheduledEvents', eventId }
+      {
+        source: 'scheduledEvents',
+        eventId,
+      }
     );
   }
 
-  const content = await renderEventContent(guild, record, config);
-  await upsertEventMessage(channel, record, content);
-  return changed;
+  const content = await renderEventContent(
+    guild,
+    record,
+    config
+  );
+  const { created } = await upsertEventMessage(
+    channel,
+    record,
+    content
+  );
+
+  return changed || created;
 }
 
 function createScheduledEventSynchronizer(client) {
   const config = getConfig();
   const eventData = getEventData();
+
   let timer = null;
   let isRunning = false;
   let isStarted = false;
@@ -219,31 +480,54 @@ function createScheduledEventSynchronizer(client) {
     isRunning = true;
 
     try {
-      const guild = await getGuildOrThrow(client, config.guildId);
-      const channel = await getTextChannelOrThrow(client, config.channelId);
-      const events = await guild.scheduledEvents.fetch();
+      const guild = await getGuildOrThrow(
+        client,
+        config.guildId
+      );
+      const channel = await getTextChannelOrThrow(
+        client,
+        config.channelId
+      );
+      const events =
+        await guild.scheduledEvents.fetch();
 
-      logInfo(`Fetched ${events.size} scheduled event(s).`, { source: 'scheduledEvents.tick' });
+      logDebug(
+        `Fetched ${events.size} scheduled event(s).`,
+        { source: 'scheduledEvents.tick' }
+      );
 
       let changed = await reconcileRemovedEvents(
         guild,
         channel,
         eventData,
-        new Set(events.map((event) => event.id)),
+        new Set(
+          events.map((event) => event.id)
+        ),
         config
       );
 
       for (const event of events.values()) {
-        changed = (await reconcileSingleEvent(guild, channel, event, eventData, config)) || changed;
+        changed =
+          (await reconcileSingleEvent(
+            guild,
+            channel,
+            event,
+            eventData,
+            config
+          )) || changed;
       }
 
       if (changed) {
         await saveEvents();
       }
     } catch (error) {
-      await logError('scheduledEvents.tick', error);
+      await logError(
+        'scheduledEvents.tick',
+        error
+      );
     } finally {
       isRunning = false;
+
       if (isStarted) {
         const interval =
           Object.keys(eventData).length > 0
@@ -251,7 +535,12 @@ function createScheduledEventSynchronizer(client) {
             : config.eventPollIntervalMs;
 
         timer = setTimeout(() => {
-          tick().catch(() => {});
+          tick().catch((error) => {
+            logError(
+              'scheduledEvents.tick.timer',
+              error
+            ).catch(() => {});
+          });
         }, interval);
         timer.unref?.();
       }
@@ -262,8 +551,14 @@ function createScheduledEventSynchronizer(client) {
     start() {
       if (isStarted) return;
       isStarted = true;
-      tick().catch(() => {});
+      tick().catch((error) => {
+        logError(
+          'scheduledEvents.tick.start',
+          error
+        ).catch(() => {});
+      });
     },
+
     stop() {
       isStarted = false;
       if (timer) {
@@ -271,6 +566,7 @@ function createScheduledEventSynchronizer(client) {
         timer = null;
       }
     },
+
     tick,
   };
 }
@@ -280,4 +576,10 @@ module.exports = {
   getStatusLabel,
   toSubscriberRecord,
   renderEventContent,
+  fitEventContent,
+  upsertEventMessage,
+  isUnknownMessageError,
+  selectContinuousSubscriberRecord,
+  reconcileRemovedEvents,
+  reconcileSingleEvent,
 };

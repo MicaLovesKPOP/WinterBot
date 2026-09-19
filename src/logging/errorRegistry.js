@@ -172,7 +172,7 @@ function buildGroupedSummary(records) {
   return [...groups.values()].sort((left, right) => right.count - left.count);
 }
 
-function buildDailySummaryAndReset() {
+function buildDailySummary() {
   if (errorRegistry.size === 0) return null;
 
   const records = [...errorRegistry.values()];
@@ -194,11 +194,22 @@ function buildDailySummaryAndReset() {
     }
   }
 
-  errorRegistry.clear();
   return lines.join('\n');
+}
+
+function clearErrorRegistry() {
+  errorRegistry.clear();
+}
+
+function buildDailySummaryAndReset() {
+  const summary = buildDailySummary();
+  if (summary) clearErrorRegistry();
+  return summary;
 }
 
 module.exports = {
   registerError,
+  buildDailySummary,
+  clearErrorRegistry,
   buildDailySummaryAndReset,
 };
