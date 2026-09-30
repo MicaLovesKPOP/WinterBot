@@ -83,7 +83,7 @@ Each channel contains a `requirements` array. All requirements in that array mus
 
 Supported requirement types:
 
-- `mediaOnly` — requires image, video, or audio media. Captions are allowed, but non-media attachments and links that do not resolve to media are rejected.
+- `mediaOnly` — requires at least one real image, video, or audio attachment/embed. Captions, contextual links, and other extras are allowed once real media is present. Message updates are re-checked only when WinterBot can verify a fresh user edit; embed/metadata-only updates and partial historical updates are ignored.
 - `requiredLink` — requires one or more links matching configured domains, optional path prefixes, and optional query-parameter rules.
 
 Example:

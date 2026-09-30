@@ -9,6 +9,7 @@ const {
   evaluateMediaOnly,
   evaluateRequiredLink,
   evaluateMessageRequirements,
+  isActualMessageEdit,
 } = require('../src/discord/messageRequirements');
 
 function makeMessage({ content = '', attachments = [], embeds = [] } = {}) {
@@ -72,29 +73,32 @@ test('mediaOnly allows media with captions and rejects plain text/non-media file
   );
 });
 
-test('mediaOnly rejects mixed media/non-media attachments and unrelated links', () => {
+test('mediaOnly allows contextual links and non-media extras when real media is present', () => {
   assert.equal(
     evaluateMediaOnly(
       makeMessage({
         attachments: [{ contentType: 'image/png' }, { contentType: 'application/zip' }],
       })
     ).allowed,
-    false
+    true
   );
 
   assert.equal(
     evaluateMediaOnly(
       makeMessage({
-        content: 'https://example.com',
-        attachments: [{ contentType: 'image/png' }],
-        embeds: [{ type: 'link', thumbnail: { url: 'https://example.com/thumb.jpg' } }],
+        content:
+          'All-in-one: https://viewsync.net/watch?v=example\nVideo: https://youtube.com/watch?v=example',
+        embeds: [
+          { type: 'link', thumbnail: { url: 'https://viewsync.net/thumb.jpg' } },
+          { type: 'video', video: { url: 'https://youtube.com/embed/example' } },
+        ],
       })
     ).allowed,
-    false
+    true
   );
 });
 
-test('mediaOnly accepts media links only when Discord resolves them to media', () => {
+test('mediaOnly still requires at least one link or attachment to resolve to real media', () => {
   assert.equal(
     evaluateMediaOnly(
       makeMessage({
@@ -309,5 +313,62 @@ test('requiredLink produces natural singular failure text', () => {
   assert.equal(
     result.reason,
     'requires a matching link to steamcommunity.com'
+  );
+});
+
+test('messageUpdate moderation runs only when Discord reports a newer edited timestamp', () => {
+  assert.equal(
+    isActualMessageEdit(
+      { editedTimestamp: null },
+      { editedTimestamp: null }
+    ),
+    false
+  );
+
+  assert.equal(
+    isActualMessageEdit(
+      { editedTimestamp: null },
+      { editedTimestamp: 1_800_000_000_000 }
+    ),
+    true
+  );
+
+  assert.equal(
+    isActualMessageEdit(
+      { editedTimestamp: 1_800_000_000_000 },
+      { editedTimestamp: 1_800_000_000_000 }
+    ),
+    false
+  );
+
+  assert.equal(
+    isActualMessageEdit(
+      { editedTimestamp: 1_800_000_000_000 },
+      { editedTimestamp: 1_800_000_000_100 }
+    ),
+    true
+  );
+});
+
+test('an embed-only update on an ancient unedited message is ignored', () => {
+  const oldMessage = {
+    editedTimestamp: null,
+    embeds: [],
+  };
+  const newMessage = {
+    editedTimestamp: null,
+    embeds: [{ type: 'video', video: { url: 'https://youtube.com/embed/example' } }],
+  };
+
+  assert.equal(isActualMessageEdit(oldMessage, newMessage), false);
+});
+
+test('an update to an uncached/partial old message is not treated as a proven user edit', () => {
+  assert.equal(
+    isActualMessageEdit(
+      { partial: true, editedTimestamp: null },
+      { editedTimestamp: 1_800_000_000_000 }
+    ),
+    false
   );
 });
