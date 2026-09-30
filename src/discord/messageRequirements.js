@@ -99,30 +99,11 @@ function isMediaEmbed(embed) {
 function evaluateMediaOnly(message) {
   const attachments = toArray(message?.attachments);
   const embeds = toArray(message?.embeds);
-  const urls = Array.from(new Set(extractUrls(message?.content)));
 
-  if (attachments.some((attachment) => !isMediaAttachment(attachment))) {
-    return {
-      allowed: false,
-      reason: 'contains a non-media attachment',
-    };
-  }
+  const hasMediaAttachment = attachments.some(isMediaAttachment);
+  const hasMediaEmbed = embeds.some(isMediaEmbed);
 
-  const mediaAttachments = attachments.filter(isMediaAttachment);
-  const mediaEmbeds = embeds.filter(isMediaEmbed);
-
-  if (urls.length > 0) {
-    const nonMediaEmbeds = embeds.filter((embed) => !isMediaEmbed(embed));
-
-    if (nonMediaEmbeds.length > 0 || mediaEmbeds.length < urls.length) {
-      return {
-        allowed: false,
-        reason: 'contains a link that did not resolve to image, video, or audio media',
-      };
-    }
-  }
-
-  if (mediaAttachments.length === 0 && mediaEmbeds.length === 0) {
+  if (!hasMediaAttachment && !hasMediaEmbed) {
     return {
       allowed: false,
       reason: 'does not contain image, video, or audio media',
@@ -261,6 +242,22 @@ function shouldIgnoreMessage(message, policy, botUserId) {
   return false;
 }
 
+function isActualMessageEdit(oldMessage, newMessage) {
+  // If Discord did not provide the previous full message, we cannot prove that
+  // this update was a fresh user edit rather than an embed/metadata refresh.
+  // Fail safe by leaving the message alone.
+  if (!oldMessage || oldMessage.partial) return false;
+
+  const oldEditedTimestamp = Number(oldMessage.editedTimestamp || 0);
+  const newEditedTimestamp = Number(newMessage?.editedTimestamp || 0);
+
+  if (!Number.isFinite(newEditedTimestamp) || newEditedTimestamp <= 0) {
+    return false;
+  }
+
+  return newEditedTimestamp > oldEditedTimestamp;
+}
+
 async function fetchFreshMessage(message) {
   if (typeof message?.fetch !== 'function') return message;
   return message.fetch(true);
@@ -376,7 +373,8 @@ function registerMessageRequirementHandlers(client) {
     queueEnforcement(message, 'messageCreate');
   });
 
-  client.on('messageUpdate', (_oldMessage, newMessage) => {
+  client.on('messageUpdate', (oldMessage, newMessage) => {
+    if (!isActualMessageEdit(oldMessage, newMessage)) return;
     queueEnforcement(newMessage, 'messageUpdate', true);
   });
 
@@ -395,5 +393,6 @@ module.exports = {
   evaluateMediaOnly,
   evaluateRequiredLink,
   evaluateMessageRequirements,
+  isActualMessageEdit,
   registerMessageRequirementHandlers,
 };
