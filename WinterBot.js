@@ -5,6 +5,10 @@ const { initializeUptimeStore, saveUptime } = require('./src/persistence/uptimeS
 const { createDiscordClient, loginDiscordClient } = require('./src/discord/client');
 const { registerEventHandlers, stopEventHandlers } = require('./src/discord/events');
 const { initializeVersionTracker } = require('./src/versioning/versionTracker');
+const {
+  startNightlySelfUpdate,
+  stopNightlySelfUpdate,
+} = require('./src/update/updateMonitor');
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -42,6 +46,10 @@ async function shutdown(reason, exitCode = 0, error = null) {
       await withTimeout(logError(`app.${reason}`, error), 3_000, 'Error logging');
     } catch (_) {}
   }
+
+  try {
+    stopNightlySelfUpdate();
+  } catch (_) {}
 
   try {
     stopEventHandlers();
@@ -137,6 +145,10 @@ async function bootstrap() {
   client = createDiscordClient();
   registerEventHandlers(client, botVersion);
   await loginDiscordClient(client);
+
+  startNightlySelfUpdate(async () => {
+    await shutdown('automaticUpdate', 1);
+  });
 }
 
 bootstrap().catch(async (error) => {

@@ -202,6 +202,24 @@ The state file uses a versioned schema and keeps `.versionState.json.bak` as a r
 
 Do not copy `.versionState.json` between unrelated installations. It is runtime state and is Git-ignored.
 
+## Nightly self-update
+
+When the hosting environment has its existing Git updater enabled with `AUTO_UPDATE=1` and `GIT_ADDRESS` points to a GitHub repository, WinterBot schedules one update check per day at **04:45 Europe/Amsterdam**.
+
+A restart for an update is allowed only when all of the following are true:
+
+- the configured branch contains a different commit than the currently running checkout
+- the newest branch commit is at least 60 minutes old
+- the local tracked Git working tree is clean
+- WinterBot is running the configured branch
+- the exact remote commit has a completed successful GitHub Actions push run named `Test`
+
+If all checks pass, WinterBot performs its normal persistence cleanup and intentionally exits non-zero. The host process manager restarts it, and the existing hosting startup command performs the Git pull and dependency install before WinterBot starts again.
+
+Embed/runtime state and ignored installation files are not part of this Git update decision. If GitHub is unavailable, CI has not passed, or any safety check is uncertain, WinterBot leaves the running process untouched and tries again at the next nightly check.
+
+The schedule is calculated in the `Europe/Amsterdam` time zone so it remains 04:45 local time across daylight-saving changes.
+
 ## Local development
 
 ```bash
@@ -226,7 +244,8 @@ The included GitHub Actions workflow runs on Node.js 24 and performs:
 - `src/logging` – structured logging, error grouping, log rotation, Discord-safe chunking
 - `src/persistence` – queued atomic save/load logic and recovery
 - `src/reporting` – weekly operational summaries
-- `src/versioning` – package-version lookup
+- `src/update` – guarded nightly GitHub update detection and restart scheduling
+- `src/versioning` – content-hash runtime version tracking
 - `tests` – focused regression tests
 
 ## License
