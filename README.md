@@ -231,7 +231,7 @@ npm start
 
 ## CI
 
-The included GitHub Actions workflow runs on Node.js 24 and performs:
+The included GitHub Actions workflow runs the same checks on both the production-host runtime (Node.js 18.20.8) and Node.js 24:
 
 1. `npm ci`
 2. `npm test`
