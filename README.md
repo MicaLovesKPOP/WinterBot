@@ -15,6 +15,14 @@ WinterBot is a Discord bot for tracking scheduled-event registrations and enforc
 - Posts daily error summaries and weekly health reports
 - Includes automated regression tests for the most failure-prone behavior
 
+## Availability-based scheduling (opt-in preview)
+
+WinterBot also includes a mobile-friendly scheduling planner that collects each member's available/unavailable days, supports multiple time windows and maximum attendance durations, finds best-attendance time slots, optionally lets participants vote on a selected subset, and creates organizer-approved Discord Scheduled Events (at most one per calendar day). The existing event-registration tracker is unchanged.
+
+**Try it without Discord credentials:** run `npm ci`, then `npm run scheduler:demo` and open `http://127.0.0.1:8791` on the same computer. The demo cannot post to Discord or create real events. Switch between sample participants and Organizer to test all stages.
+
+See **[SCHEDULING.md](SCHEDULING.md)** for the complete UX, rules, architecture, testing steps, opt-in live OAuth setup and limitations. The browser planner is implemented; embedded Discord Activity launching and live-server end-to-end verification are future steps. Do not enable `SCHEDULING_ENABLED=1` on a production server before completing live testing.
+
 ## Runtime
 
 WinterBot requires Node.js 18.20 or newer.

@@ -5,6 +5,7 @@ const { initializeUptimeStore, saveUptime } = require('./src/persistence/uptimeS
 const { createDiscordClient, loginDiscordClient } = require('./src/discord/client');
 const { registerEventHandlers, stopEventHandlers } = require('./src/discord/events');
 const { initializeVersionTracker } = require('./src/versioning/versionTracker');
+const { createScheduler } = require('./src/scheduling/server');
 const {
   startNightlySelfUpdate,
   stopNightlySelfUpdate,
@@ -13,6 +14,7 @@ const {
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 let client = null;
+let schedulingServer = null;
 let shuttingDown = false;
 
 async function withTimeout(promise, timeoutMs, label) {
@@ -54,6 +56,15 @@ async function shutdown(reason, exitCode = 0, error = null) {
   try {
     stopEventHandlers();
   } catch (_) {}
+
+  try {
+    if (schedulingServer) {
+      await withTimeout(schedulingServer.stop(), 5_000, 'Scheduling server shutdown');
+      schedulingServer = null;
+    }
+  } catch (error) {
+    try { await logError('app.shutdown.schedulingServer', error); } catch (_) {}
+  }
 
   try {
     const results = await withTimeout(
@@ -145,6 +156,25 @@ async function bootstrap() {
   client = createDiscordClient();
   registerEventHandlers(client, botVersion);
   await loginDiscordClient(client);
+
+  if (process.env.SCHEDULING_ENABLED === '1') {
+    const config = require('./src/config').getConfig();
+    schedulingServer = createScheduler({
+      mode: 'live',
+      client,
+      guildId: config.guildId,
+      channelId: process.env.SCHEDULING_CHANNEL_ID || config.channelId,
+      clientId: process.env.DISCORD_CLIENT_ID,
+      clientSecret: process.env.DISCORD_CLIENT_SECRET,
+      sessionSecret: process.env.SCHEDULING_SESSION_SECRET,
+      baseUrl: process.env.SCHEDULING_BASE_URL,
+      adminIds: String(process.env.SCHEDULING_ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean),
+      host: process.env.SCHEDULING_HOST || '127.0.0.1',
+      port: Number(process.env.SCHEDULING_PORT || 8791),
+    });
+    const { url } = await schedulingServer.start();
+    logInfo('Scheduling web server running at ' + url, { source: 'scheduling.start' });
+  }
 
   startNightlySelfUpdate(async () => {
     await shutdown('automaticUpdate', 1);

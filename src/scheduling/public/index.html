@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101728">
+  <meta name="description" content="WinterBot availability planning and Discord event scheduling">
+  <title>WinterBot · Plan together</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="side">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">✳</div>
+        <div><strong>WinterBot</strong><span>EVENT PLANNER</span></div>
+      </div>
+      <div class="side-section">
+        <p class="eyebrow">WORKSPACE</p>
+        <button class="side-nav active" id="nav-availability" type="button"><span class="nav-icon">◷</span> My availability</button>
+        <button class="side-nav" id="nav-organizer" type="button"><span class="nav-icon">▦</span> Organizer board</button>
+        <button class="side-nav" id="nav-new" type="button"><span class="nav-icon">＋</span> New planning round</button>
+      </div>
+      <div class="side-bottom">
+        <div id="demo-switch"></div>
+        <div id="profile"></div>
+        <div class="side-hint">Built for Discord. Dates and times are displayed in the round's time zone.</div>
+      </div>
+    </aside>
+    <div class="main-column">
+      <header class="mobile-header">
+        <div class="mobile-brand"><div class="brand-mark">✳</div><strong>WinterBot</strong></div>
+        <select id="mobile-nav" aria-label="Choose screen">
+          <option value="availability">My availability</option>
+          <option value="organizer">Organizer board</option>
+          <option value="new">New planning round</option>
+        </select>
+      </header>
+      <main class="content">
+        <div id="flash" role="status" aria-live="polite"></div>
+        <div id="app-content"><div class="loading"><div class="spinner"></div> Loading scheduling planner…</div></div>
+        <footer class="footer">WinterBot Scheduling · One actual event per calendar day · <span id="mode-footer"></span></footer>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

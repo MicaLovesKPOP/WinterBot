@@ -5,6 +5,8 @@
   "main": "WinterBot.js",
   "scripts": {
     "start": "node WinterBot.js",
+    "scheduler:demo": "node src/scheduling/demo.js",
+    "test:ui": "node scripts/uiSmoke.js",
     "test": "node --test",
     "check": "npm test && npm audit --omit=dev --audit-level=high"
   },
@@ -12,9 +14,13 @@
   "license": "GPL-3.0",
   "dependencies": {
     "discord.js": "^14.27.0",
-    "dotenv": "^16.0.3"
+    "dotenv": "^16.0.3",
+    "luxon": "^3.7.2"
   },
   "engines": {
     "node": ">=18.20.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.0"
   }
 }

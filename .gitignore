@@ -11,6 +11,12 @@ uptime-repair.json
 logs/
 *.log
 
+# Scheduling runtime data and local UI previews
+scheduling.json
+scheduling-demo.json
+*.corrupt.*
+preview-screens/
+
 # Auto-generated bot data
 .versionState.json
 uptimeData.json
