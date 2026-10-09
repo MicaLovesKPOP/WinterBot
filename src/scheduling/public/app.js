@@ -430,14 +430,18 @@ function newRoundForm() {
     dateTo + '" required></div></div>';
   html += '<div class="grid-2"><div class="field"><label for="timezone">Planning time zone</label><input id="timezone" name="timezone" value="Europe/Amsterdam" required></div>' +
     '<div class="field"><label for="durationMinutes">Event duration (minutes)</label><input id="durationMinutes" name="durationMinutes" type="number" min="15" max="720" step="15" value="120" required></div></div>';
-  html += '<div class="grid-2"><div class="field"><label for="collectionHours">Availability window (hours)</label><input id="collectionHours" name="collectionHours" type="number" min=".01" max="336" step=".5" value="72"></div>' +
-    '<div class="field"><label for="voteHours">Optional vote window (hours)</label><input id="voteHours" name="voteHours" type="number" min=".01" max="168" step=".5" value="24"></div></div>';
+  html += '<div class="grid-2"><div class="field"><label for="collectionHours">Availability window (hours)</label><input id="collectionHours" name="collectionHours" type="number" min=".5" max="336" step=".5" value="72"></div>' +
+    '<div class="field"><label for="voteHours">Optional vote window (hours)</label><input id="voteHours" name="voteHours" type="number" min=".5" max="168" step=".5" value="24"></div></div>';
   html += '<div class="grid-2"><div class="field"><label for="stepMinutes">Start-time precision</label><select id="stepMinutes" name="stepMinutes"><option value="15">15 minutes</option>' +
     '<option value="30" selected>30 minutes</option><option value="60">60 minutes</option></select></div>' +
     '<div class="field"><label for="threshold">Near-best threshold (%)</label><input type="number" id="threshold" name="threshold" min="0" max="100" value="90"></div></div>';
   html += '<div class="field"><label for="participants">Optional fixed participants</label><textarea id="participants" name="participants" placeholder="Discord user ID,display name (one per line)"></textarea>' +
     '<span class="help">Leave empty for open enrollment. With a fixed list, only those users can submit availability and vote. IDs in live mode must be Discord user IDs.</span></div>';
-  html += '<div class="field"><label for="location">Discord event location</label><input id="location" name="location" value="Discord" maxlength="100"></div>';
+  html += '<div class="field"><label for="voiceChannelId">Discord voice channel ID (optional)</label>' +
+    '<input id="voiceChannelId" name="voiceChannelId" inputmode="numeric" pattern="[0-9]{15,22}" placeholder="Paste the voice channel ID">' +
+    '<span class="help">If supplied, create a joinable voice-channel event. Otherwise use the external event location below.</span></div>' +
+    '<div class="field"><label for="location">External event location</label>' +
+    '<input id="location" name="location" value="Discord" maxlength="100"></div>';
   html += '<div class="row between"><span class="muted small">The event will only be created when you explicitly approve it.</span>' +
     '<button class="btn primary" type="submit">Create planning round</button></div></form>';
   return html;
@@ -590,8 +594,18 @@ async function handleAction(node) {
     if (new Set(dates).size !== dates.length) return announce('Only one scheduled event per calendar day. Choose one option from each day.', true);
     if (!confirm('Create ' + selected.length + ' scheduled event(s)' +
       (state.me.demo ? ' in safe demo mode' : ' on Discord') + '?')) return;
+    const retryIds = new Set(selected.filter(s => r.publications.some(p =>
+      p.candidateId === s.candidateId && p.status !== 'created')).map(s => s.candidateId));
+    if (!state.me.demo && retryIds.size > 0 &&
+      !confirm('IMPORTANT: An earlier event-creation attempt may already have succeeded. Check the Discord Scheduled Events list BEFORE retrying. Have you verified that no duplicate event exists?')) return;
     for (const s of selected) {
-      await post('publish', { candidateId: s.candidateId, startAt: s.startAt });
+      try {
+        await post('publish', { candidateId: s.candidateId, startAt: s.startAt,
+          confirmedRetry: retryIds.has(s.candidateId) && !state.me.demo });
+      } catch (error) {
+        await refresh().catch(() => {});
+        throw error;
+      }
     }
     state.picked.clear();
     return announce(selected.length + (state.me.demo ? ' simulated event(s) created.' : ' Discord event(s) created.'));
@@ -654,7 +668,7 @@ document.addEventListener('submit', event => {
     timezone: fd.get('timezone'), durationMinutes: Number(fd.get('durationMinutes')),
     stepMinutes: Number(fd.get('stepMinutes')), collectionHours: Number(fd.get('collectionHours')),
     voteHours: Number(fd.get('voteHours')), threshold: Number(fd.get('threshold')) / 100,
-    participants, location: fd.get('location'),
+    participants, location: fd.get('location'), voiceChannelId: fd.get('voiceChannelId'),
   };
   const submit = form.querySelector('[type=submit]');
   submit.disabled = true;

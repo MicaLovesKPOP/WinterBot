@@ -55,6 +55,8 @@ function createRound(input, now = new Date()) {
   invariant(threshold >= 0 && threshold <= 1, 'Attendance threshold must be between 0 and 1.');
   const targetCount = input.targetCount == null ? 5 : Number(input.targetCount);
   invariant(Number.isInteger(targetCount) && targetCount >= 1 && targetCount <= 30, 'Shortlist target must be 1–30.');
+  const voiceChannelId = String(input.voiceChannelId || '').trim();
+  invariant(!voiceChannelId || /^\d{15,22}$/.test(voiceChannelId), 'Voice channel must be a Discord channel ID.');
   const participants = [];
   const seen = new Set();
   for (const p of input.participants || []) {
@@ -68,7 +70,7 @@ function createRound(input, now = new Date()) {
   return {
     id: crypto.randomUUID(), title, timezone, startDate: start.toISODate(), endDate: end.toISODate(),
     durationMinutes, stepMinutes, collectionHours, voteHours, threshold, targetCount,
-    location: String(input.location || 'Discord').trim().slice(0, 100),
+    location: String(input.location || 'Discord').trim().slice(0, 100), voiceChannelId,
     description: String(input.description || '').slice(0, 1000),
     rosterMode: participants.length ? 'fixed' : 'open', participants, availability: {}, phase: 'collecting',
     createdAt: new Date(now).toISOString(),

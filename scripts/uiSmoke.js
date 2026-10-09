@@ -112,6 +112,21 @@ async function run() {
     assert.equal(resetData.rounds.length, 1);
     assert.equal(resetData.rounds[0].phase,'collecting');
     info('Organizer can restart the demo with fresh sample data');
+
+    await page.locator('#nav-new').click();
+    await page.locator('#title').fill('Voice chat event');
+    await page.locator('#voiceChannelId').fill('123456789012345678');
+    assert.equal(await page.locator('#create-round').evaluate(f => f.checkValidity()), true);
+    await page.locator('#create-round [type=submit]').click();
+    await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'Organizer board', null, { timeout: 15000 });
+    const allRounds=await (await page.request.get(base+'/api/rounds',
+      {headers:{'X-Demo-User':'owner'}})).json();
+    const newId=allRounds.rounds.find(r=>r.title==='Voice chat event')?.id;
+    assert.ok(newId,'new round should be created');
+    const createdRound=await (await page.request.get(base+'/api/rounds/'+newId,
+      {headers:{'X-Demo-User':'owner'}})).json();
+    assert.equal(createdRound.round.voiceChannelId,'123456789012345678');
+    info('Organizer can create a round targeting a Discord voice channel');
   } finally {
     await browser.close();
   }

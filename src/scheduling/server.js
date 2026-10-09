@@ -220,7 +220,9 @@ function createScheduler(options) {
         await store.transaction(state => { closeVote(getRound(state, id), new Date(), true); });
       } else if (action === 'publish') {
         if (!me.admin) throw httpError(403, 'Organizer permission required.');
-        const publication = await publishCandidate(store, id, body.candidateId, body.startAt, { ...config, demo });
+        const publication = await publishCandidate(store, id, body.candidateId, body.startAt, {
+          ...config, demo, confirmedRetry: body.confirmedRetry === true,
+        });
         if (!demo && getRound(store.read(), id).announcementMessageId) {
           try { await postRoundPanel(store, id, { ...config, baseUrl: auth.base }); }
           catch (error) { console.error('Event announcement update failed:', error.message); }

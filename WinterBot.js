@@ -5,7 +5,6 @@ const { initializeUptimeStore, saveUptime } = require('./src/persistence/uptimeS
 const { createDiscordClient, loginDiscordClient } = require('./src/discord/client');
 const { registerEventHandlers, stopEventHandlers } = require('./src/discord/events');
 const { initializeVersionTracker } = require('./src/versioning/versionTracker');
-const { createScheduler } = require('./src/scheduling/server');
 const {
   startNightlySelfUpdate,
   stopNightlySelfUpdate,
@@ -157,23 +156,39 @@ async function bootstrap() {
   registerEventHandlers(client, botVersion);
   await loginDiscordClient(client);
 
+  // Scheduling is strictly opt-in. A failed optional web feature must never
+  // prevent the established registration-tracking bot from starting.
   if (process.env.SCHEDULING_ENABLED === '1') {
-    const config = require('./src/config').getConfig();
-    schedulingServer = createScheduler({
-      mode: 'live',
-      client,
-      guildId: config.guildId,
-      channelId: process.env.SCHEDULING_CHANNEL_ID || config.channelId,
-      clientId: process.env.DISCORD_CLIENT_ID,
-      clientSecret: process.env.DISCORD_CLIENT_SECRET,
-      sessionSecret: process.env.SCHEDULING_SESSION_SECRET,
-      baseUrl: process.env.SCHEDULING_BASE_URL,
-      adminIds: String(process.env.SCHEDULING_ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean),
-      host: process.env.SCHEDULING_HOST || '127.0.0.1',
-      port: Number(process.env.SCHEDULING_PORT || 8791),
-    });
-    const { url } = await schedulingServer.start();
-    logInfo('Scheduling web server running at ' + url, { source: 'scheduling.start' });
+    try {
+      const config = require('./src/config').getConfig();
+      const { createScheduler } = require('./src/scheduling/server');
+      schedulingServer = createScheduler({
+        mode: 'live',
+        client,
+        guildId: config.guildId,
+        channelId: process.env.SCHEDULING_CHANNEL_ID || config.channelId,
+        clientId: process.env.DISCORD_CLIENT_ID,
+        clientSecret: process.env.DISCORD_CLIENT_SECRET,
+        sessionSecret: process.env.SCHEDULING_SESSION_SECRET,
+        baseUrl: process.env.SCHEDULING_BASE_URL,
+        adminIds: String(process.env.SCHEDULING_ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean),
+        host: process.env.SCHEDULING_HOST || '127.0.0.1',
+        port: Number(process.env.SCHEDULING_PORT || 8791),
+      });
+      const { url } = await schedulingServer.start();
+      logInfo('Scheduling web server running at ' + url, { source: 'scheduling.start' });
+    } catch (error) {
+      // Log the failure but continue running WinterBot's existing features.
+      try {
+        if (schedulingServer) await schedulingServer.stop();
+      } catch (_) {}
+      schedulingServer = null;
+      try {
+        await logError('scheduling.optionalStartup', error);
+      } catch (_) {
+        console.error('Optional scheduling startup failed:', error.message);
+      }
+    }
   }
 
   startNightlySelfUpdate(async () => {

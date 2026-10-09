@@ -1,6 +1,6 @@
 {
   "name": "winterbot",
-  "version": "2.6.1",
+  "version": "2.7.0",
   "description": "Discord scheduled-event registration tracker bot",
   "main": "WinterBot.js",
   "scripts": {

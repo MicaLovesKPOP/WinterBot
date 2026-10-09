@@ -4,11 +4,11 @@
 
 **Ready to try:** fully functional, locally hosted browser preview with a real API, persistent answers, mobile-friendly interface, scheduling algorithm, optional voting, and simulated event creation.
 
-**Implemented, awaiting real Discord verification:** opt-in live browser sign-in via Discord OAuth2, guild membership/organizer permission checks, channel invitation announcements, and real Discord Scheduled Event creation with duplicate reconciliation.
+**Implemented, awaiting real Discord verification:** opt-in live browser sign-in via Discord OAuth2, guild membership/organizer permission checks, channel invitation announcements, and real Discord Scheduled Event creation (voice-channel or external) with duplicate reconciliation.
 
 **Not yet provided:** the Discord Embedded App SDK Activity launcher, public HTTPS hosting, and live testing with real Discord credentials. The web planner works in a normal browser; it is *not yet* an embedded Activity.
 
-The existing scheduled-event registration tracker is left untouched. Scheduling is disabled by default in WinterBot.js.
+The existing scheduled-event registration tracker is left untouched. Scheduling is **disabled by default** in WinterBot.js. The scheduler's Node module is lazy-loaded only when SCHEDULING_ENABLED=1. Bad scheduler configuration or an unavailable HTTP port is logged without stopping the original bot.
 
 ## Test now
 
@@ -66,14 +66,15 @@ Restarting the demo preserves its local state. To replay the full walkthrough, s
 - Only **losing options included in the ballot** disappear from the active organizer board. Unvoted candidates are never discarded; original history is retained.
 - A winning voted option's **voted-on start time is locked**. Unvoted options may still use any of their valid start times.
 - The organizer must explicitly approve each final event. Winning a vote never schedules anything automatically.
+- Optional Discord voice channel ID creates a **voice-channel Scheduled Event** that points directly to that voice channel. Without it, WinterBot creates an **External** Scheduled Event using the configured location.
 - **At most one published WinterBot event per local calendar day**, enforced server-side across scheduling rounds. Several different days may be scheduled in one round.
 
 ### Reliability and security
 
 - Isolated, versioned scheduling JSON with sequential mutations, atomic temporary writes and last-known-good backup recovery.
 - Every deadline, permission check, vote, selected option and day limit is validated on the server.
-- Live publishing persists a unique **pending intent** first, then looks for the intent marker in an existing Discord Scheduled Event before creating anything. Retrying a partially failed operation does not knowingly double-create events.
-- Uncertain Discord failures are stored with needs_attention and can be retried for the original candidate/time.
+- Live publishing persists a unique **pending intent** first, then looks for the intent marker in an existing Discord Scheduled Event before creating anything. The marker is always retained even when the event description reaches Discord's length limit. Concurrent requests for one intent share the same in-flight operation; uncertain outcomes require Discord reconciliation and explicitly confirmed retry before another creation attempt.
+- Uncertain Discord failures are stored with needs_attention and may be reconciled. Before forcing a retry, the organizer must confirm that no matching Discord event already exists. A marker in a different WinterBot event on the same date also blocks publication, including after a lost state-file recovery.
 - Live OAuth2 requests Discord identity, then verifies guild membership. Organizers require server ownership, Manage Server, Manage Events or an explicit configured admin ID.
 - Signed HttpOnly Secure SameSite cookies, OAuth state validation and same-origin mutation restrictions protect the live browser API.
 - The local demo accepts identity switching but binds **only to localhost** and never creates real Discord events. Do not tunnel it onto the public internet.
@@ -104,6 +105,15 @@ Bot permissions: **Create Events** for External events and the ability to view/s
 The organizer starts rounds from the authenticated browser UI and may click **Post/update Discord invitation**. Participants receive a Discord message linking to the browser planner. If already announced, the message updates as availability/voting closes. These live Discord paths require testing with valid credentials before production rollout.
 
 **The code does not yet implement a Discord Activity launch.** A fully embedded Activity needs the Discord Embedded App SDK, Activity URL mappings and authorization flow. Keep the normal mobile browser as a fallback when adding it.
+
+### Safe rollout / rollback
+
+1. Merge the tested code with SCHEDULING_ENABLED **absent/0**. In this condition the original bot performs the same scheduled-event monitoring as before. No scheduling web server, Discord OAuth or new scheduled-event creation runs.
+2. On a staging bot/test guild, configure OAuth2, HTTPS and scheduling permissions. Verify a real end-to-end creation, RSVP and tracking before enabling production.
+3. Enable SCHEDULING_ENABLED=1 **only after** those tests and a working HTTPS URL; then publish a planning-round invitation intentionally.
+4. To deactivate scheduling, set SCHEDULING_ENABLED=0 and restart the bot. Existing scheduled Discord events are not deleted by disabling WinterBot's planner. If the entire release must be reverted, use Git to revert the merge and let the existing nightly update guard validate CI before a new restart.
+
+**Auto-update note:** the bot has a separate guarded nightly main-branch updater. Merging this feature may still cause its normal code-update restart after the commit passes CI and the minimum-age check. The feature flag prevents the scheduling subsystem from starting until explicitly configured.
 
 ## Verification
 

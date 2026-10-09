@@ -42,6 +42,10 @@ function createAuth(options) {
     { id: 'p7', name: 'Alex' }, { id: 'p8', name: 'Sophie' },
   ];
   const admins = new Set(options.adminIds || []);
+  // Validated guild membership and permissions may be reused briefly to
+  // avoid a Discord REST fetch for every availability autosave.
+  const memberAuthCache = new Map();
+  const MEMBER_AUTH_CACHE_MS = 60000;
   function getSession(req) {
     if (demo) {
       const requested = String(req.headers['x-demo-user'] || 'owner');
@@ -64,18 +68,26 @@ function createAuth(options) {
   async function identity(req) {
     const session = getSession(req);
     if (!session || demo) return session;
+    const cached = memberAuthCache.get(session.id);
+    if (cached && cached.expiresAt > Date.now()) return { ...session, admin: cached.admin };
     const guild = await options.client.guilds.fetch(options.guildId);
     let member;
     try {
       member = await guild.members.fetch({ user: session.id, force: true });
     } catch (_) {
+      memberAuthCache.delete(session.id);
       return null;
     }
-    if (!member) return null;
+    if (!member) {
+      memberAuthCache.delete(session.id);
+      return null;
+    }
     const admin = guild.ownerId === session.id || admins.has(session.id) ||
       member.permissions.has(PermissionFlagsBits.ManageGuild) ||
       member.permissions.has(PermissionFlagsBits.ManageEvents) ||
       member.permissions.has(PermissionFlagsBits.Administrator);
+    memberAuthCache.set(session.id, { admin, expiresAt: Date.now() + MEMBER_AUTH_CACHE_MS });
+    if (memberAuthCache.size > 512) memberAuthCache.delete(memberAuthCache.keys().next().value);
     return { ...session, admin };
   }
   function requireOrigin(req) {

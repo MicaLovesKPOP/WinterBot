@@ -280,3 +280,196 @@ test('a failed publication is recoverable without creating a second intent', asy
     assert.equal(store.read().rounds[0].publications.length,1);
   } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 });
+
+
+test('Discord event description keeps durable duplicate-reconciliation marker even with long text', () => {
+  const { eventDescription, publicationMarker } = require('../src/scheduling/publisher');
+  const marker = publicationMarker('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
+  const description = eventDescription('x'.repeat(1000), marker);
+  assert.equal(description.length, 1000);
+  assert.ok(description.endsWith(marker));
+});
+
+test('two concurrent Discord publish requests produce one event and share their result', async () => {
+  const { Collection } = require('discord.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winterbot-publish-flight-'));
+  try {
+    const store = new SchedulingStore(path.join(dir, 'state.json'));
+    store.initialize();
+    const r = roundWithPeople(2, { endDate: futureDate() });
+    for (const p of r.participants) available(r, p.id, futureDate(), [fullWindow('18:00', '23:00')]);
+    closeCollection(r, new Date(), true);
+    await store.transaction(s => { s.rounds.push(r); });
+    const events = new Collection();
+    let created = 0;
+    const guild = { scheduledEvents: {
+      fetch: async () => events,
+      create: async opts => {
+        created += 1;
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const result = { id: 'e' + created, description: opts.description, scheduledStartAt: new Date(opts.scheduledStartTime) };
+        events.set(result.id, result);
+        return result;
+      },
+    } };
+    const ctx = { demo:false, client:{ guilds: {fetch:async () => guild} }, guildId:'123456789012345678' };
+    const c = r.candidates[0], start = c.slots[0].startAt;
+    const [one, two] = await Promise.all([
+      publishCandidate(store, r.id, c.id, start, ctx),
+      publishCandidate(store, r.id, c.id, start, ctx),
+    ]);
+    assert.equal(created, 1);
+    assert.equal(one.eventId, two.eventId);
+    assert.equal(store.read().rounds[0].publications.length, 1);
+  } finally { fs.rmSync(dir, { recursive:true, force:true }); }
+});
+
+test('ambiguous Discord failure reconciles an existing event without duplicating', async () => {
+  const { Collection } = require('discord.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winterbot-publish-reconcile-'));
+  try {
+    const store = new SchedulingStore(path.join(dir, 'state.json'));
+    store.initialize();
+    const r = roundWithPeople(2, {endDate:futureDate()});
+    for (const p of r.participants) available(r, p.id, futureDate(), [fullWindow('18:00','23:00')]);
+    closeCollection(r, new Date(), true);
+    await store.transaction(s => {s.rounds.push(r);});
+    const events = new Collection();
+    let created = 0;
+    const guild = { scheduledEvents: {
+      fetch: async () => events,
+      create: async opts => {
+        created += 1;
+        const event = { id:'known-' + created, description: opts.description, scheduledStartAt:new Date(opts.scheduledStartTime) };
+        events.set(event.id, event);
+        throw new Error('Network timeout after Discord accepted the event');
+      },
+    }};
+    const ctx = {demo:false,client:{guilds:{fetch:async()=>guild}},guildId:'123456789012345678'};
+    const c = r.candidates[0], start=c.slots[0].startAt;
+    await assert.rejects(publishCandidate(store,r.id,c.id,start,ctx), /Network timeout/);
+    assert.equal(store.read().rounds[0].publications[0].status,'needs_attention');
+    const resolved = await publishCandidate(store,r.id,c.id,start,ctx);
+    assert.equal(resolved.eventId,'known-1');
+    assert.equal(resolved.status,'created');
+    assert.equal(created,1);
+  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('an uncertain failed publish requires explicit operator confirmation before recreation', async () => {
+  const { Collection } = require('discord.js');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'winterbot-retry-confirm-'));
+  try {
+    const store=new SchedulingStore(path.join(dir,'state.json'));store.initialize();
+    const r=roundWithPeople(2,{endDate:futureDate()});
+    for(const p of r.participants) available(r,p.id,futureDate(),[fullWindow('18:00','23:00')]);
+    closeCollection(r,new Date(),true);
+    await store.transaction(s=>{s.rounds.push(r);});
+    let createCalls=0;
+    const events=new Collection();
+    const guild={scheduledEvents:{
+      fetch:async()=>events,
+      create:async opts=>{
+        createCalls++;
+        if(createCalls===1) throw new Error('Uncertain timeout');
+        const e={id:'result',description:opts.description,scheduledStartAt:new Date(opts.scheduledStartTime)};
+        events.set(e.id,e);return e;
+      },
+    }};
+    const ctx={demo:false,client:{guilds:{fetch:async()=>guild}},guildId:'123456789012345678'};
+    const c=r.candidates[0],start=c.slots[0].startAt;
+    await assert.rejects(publishCandidate(store,r.id,c.id,start,ctx),/Uncertain timeout/);
+    await assert.rejects(publishCandidate(store,r.id,c.id,start,ctx),/explicitly confirm/);
+    assert.equal(createCalls,1,'an unconfirmed retry must never send a new create request');
+    const result=await publishCandidate(store,r.id,c.id,start,{...ctx,confirmedRetry:true});
+    assert.equal(createCalls,2);
+    assert.equal(result.status,'created');
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('Discord scheduled events can attach to a real voice channel instead of external location', async () => {
+  const {Collection, ChannelType, GuildScheduledEventEntityType} = require('discord.js');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'winterbot-voice-event-'));
+  try {
+    const store=new SchedulingStore(path.join(dir,'state.json'));store.initialize();
+    const voiceChannelId='123456789012345678';
+    const r=roundWithPeople(2,{endDate:futureDate(),voiceChannelId});
+    for(const p of r.participants) available(r,p.id,futureDate(),[fullWindow('18:00','23:00')]);
+    closeCollection(r,new Date(),true);
+    await store.transaction(s=>{s.rounds.push(r);});
+    let options;
+    const guild={
+      channels:{fetch:async id=>({id,type:ChannelType.GuildVoice})},
+      scheduledEvents:{fetch:async()=>new Collection(),create:async opts=>{
+        options=opts;return {id:'voice-event'};
+      }},
+    };
+    const c=r.candidates[0];
+    const result=await publishCandidate(store,r.id,c.id,c.slots[0].startAt,{
+      demo:false,client:{guilds:{fetch:async()=>guild}},guildId:'987654321012345678',
+    });
+    assert.equal(result.status,'created');
+    assert.equal(options.entityType,GuildScheduledEventEntityType.Voice);
+    assert.equal(options.channel,voiceChannelId);
+    assert.equal(options.entityMetadata,undefined);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+
+test('live request authentication reuses a brief guild permission cache', async () => {
+  const crypto = require('node:crypto');
+  const { createAuth } = require('../src/scheduling/auth');
+  const userId = '123456789012345678';
+  const secret = 'this-is-a-test-session-secret-at-least-32-chars';
+  const payload = Buffer.from(JSON.stringify({
+    id: userId, name:'Test Member', exp: Date.now() + 60000,
+  })).toString('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  const req = { headers: { cookie: 'winterbot_session=' + payload + '.' + signature } };
+  let memberFetches = 0;
+  const guild = { ownerId:'999999999999999999', members: {
+    fetch: async () => {
+      memberFetches += 1;
+      return { permissions: {has:()=>false} };
+    },
+  }};
+  const auth = createAuth({
+    mode:'live', client:{guilds:{fetch:async()=>guild}},
+    guildId:'234567890123456789',clientId:'123',clientSecret:'secret',
+    sessionSecret:secret,baseUrl:'https://example.org',
+  });
+  const first = await auth.identity(req);
+  const second = await auth.identity(req);
+  assert.equal(first.id, userId);
+  assert.equal(second.id, userId);
+  assert.equal(memberFetches,1,'avoid a new guild membership REST check for every autosave');
+});
+
+
+test('concurrent scheduling invitations do not create duplicate Discord messages', async () => {
+  const { postRoundPanel } = require('../src/scheduling/publisher');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(),'winterbot-announce-flight-'));
+  try {
+    const store = new SchedulingStore(path.join(dir,'state.json'));
+    store.initialize();
+    const round = roundWithPeople(2);
+    await store.transaction(s=>{s.rounds.push(round);});
+    let sends = 0;
+    const channel = {
+      isTextBased:()=>true,
+      send:async()=>{sends++;await new Promise(resolve=>setTimeout(resolve,35));return {id:'announcement-message'};},
+    };
+    const guild={channels:{fetch:async()=>channel}};
+    const ctx={
+      client:{guilds:{fetch:async()=>guild}},guildId:'123456789012345678',
+      channelId:'987654321098765432',baseUrl:'https://calendar.example.net',
+      demo:false,
+    };
+    const [a,b]=await Promise.all([
+      postRoundPanel(store,round.id,ctx),postRoundPanel(store,round.id,ctx),
+    ]);
+    assert.equal(sends,1);
+    assert.equal(a.messageId,b.messageId);
+    assert.equal(store.read().rounds[0].announcementMessageId,'announcement-message');
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
