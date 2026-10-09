@@ -97,8 +97,8 @@ After verifying in a test server, add the following settings to the existing .en
     SCHEDULING_SESSION_SECRET=LONG_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
     SCHEDULING_CHANNEL_ID=OPTIONAL_DISCORD_TEXT_CHANNEL_ID
     SCHEDULING_TEST_MODE=1
-    SCHEDULING_MANAGEMENT_ROLE_ID=YOUR_MANAGEMENT_ROLE_ID
-    SCHEDULING_VERIFIED_ROLE_IDS=FIRST_CHECKMARK_ROLE_ID,SECOND_CHECKMARK_ROLE_ID
+
+The Official Crashday Management and both verification-role IDs are already built into the scheduling policy. The corresponding environment variables are now optional overrides; you do not need to enter those IDs again. See SCHEDULING_CHANNELS.md.
 
 Discord Developer Portal: register exactly this OAuth2 redirect URI:
 

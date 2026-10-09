@@ -10,7 +10,7 @@ const { DateTime } = require('luxon');
 const { PermissionFlagsBits, Collection } = require('discord.js');
 const { createRound, setDay, calculateCandidates, closeCollection } = require('../src/scheduling/core');
 const {
-  CHANNELS, configureChannelPolicy, destinationFor, mayUseSetupInteraction,
+  CHANNELS, DEFAULT_ROLES, configureChannelPolicy, destinationFor, mayUseSetupInteraction,
   isOrganizerMember, isVerifiedMember,
 } = require('../src/scheduling/channelPolicy');
 const { buildInvitation, buildEventAnnouncement } = require('../src/scheduling/memberAnnouncements');
@@ -381,4 +381,27 @@ test('Discord OAuth login preserves the Management setup wizard after authentica
   const cookies=captured.headers['Set-Cookie'];
   assert.ok(cookies.some(x=>x.startsWith('winterbot_view=new;')),
     'the setup wizard view should survive Discord OAuth');
+});
+
+
+test('official Management and both checkmark role IDs work without extra env configuration',()=>{
+  const defaults=configureChannelPolicy({
+    guildId:CHANNELS.guildId,logChannelId:LOGS,demo:false,
+  },{});
+  assert.equal(DEFAULT_ROLES.management,'332571825127292929');
+  assert.deepEqual(DEFAULT_ROLES.verification,['826810836302823484','826799764829372416']);
+  assert.equal(defaults.managementRoleId,DEFAULT_ROLES.management);
+  assert.deepEqual(defaults.verifiedRoleIds,DEFAULT_ROLES.verification);
+
+  const user=(id,roles)=>({id,user:{id},roles:{cache:{has:r=>roles.includes(r)}}});
+  assert.ok(isOrganizerMember(user('manager',[DEFAULT_ROLES.management]),defaults));
+  assert.equal(isOrganizerMember(user('verified',DEFAULT_ROLES.verification),defaults),false);
+  assert.ok(isVerifiedMember(user('verified',DEFAULT_ROLES.verification),defaults));
+  assert.equal(isVerifiedMember(user('one-role',[DEFAULT_ROLES.verification[0]]),defaults),false);
+  assert.equal(isVerifiedMember(user('other-role',[DEFAULT_ROLES.verification[1]]),defaults),false);
+  assert.equal(isVerifiedMember(user('no-roles',[]),defaults),false);
+  // Explicit hosting configuration remains supported, but is no longer required
+  // just to identify the existing roles in this specific Discord server.
+  assert.equal(policy.managementRoleId,MANAGEMENT);
+  assert.deepEqual(policy.verifiedRoleIds,[VERIFY1,VERIFY2]);
 });
