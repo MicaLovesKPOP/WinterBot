@@ -162,7 +162,14 @@ async function bootstrap() {
     try {
       const config = require('./src/config').getConfig();
       const { createScheduler } = require('./src/scheduling/server');
+      const { configureChannelPolicy } = require('./src/scheduling/channelPolicy');
+      const policy = configureChannelPolicy({
+        guildId: config.guildId, logChannelId: config.logChannelId, demo: false,
+      });
       schedulingServer = createScheduler({
+        policy,
+        testMode: process.env.SCHEDULING_TEST_MODE === '1',
+        reportError: (source, error) => logError('scheduling.' + source, error),
         mode: 'live',
         client,
         guildId: config.guildId,

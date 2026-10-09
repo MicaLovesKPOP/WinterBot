@@ -73,7 +73,10 @@ async function publishCandidate(store, roundId, candidateId, startAt, context) {
     const { candidate, slot } = getSlot(round, candidateId, startAt);
     invariant(Date.parse(slot.startAt) > Date.now() + 60000,
       'The proposed event must start at least one minute in the future.');
+    const thisIsTest = round.testMode === true || context.testMode === true;
     for (const r of state.rounds) {
+      // Test simulations never reserve a real Discord event calendar date.
+      if (r.id !== round.id && (r.testMode === true) !== thisIsTest) continue;
       for (const p of r.publications) {
         if (p.date !== candidate.date) continue;
         if (r.id === round.id && p.candidateId === candidateId && p.startAt === startAt) {
@@ -94,7 +97,7 @@ async function publishCandidate(store, roundId, candidateId, startAt, context) {
     newIntent = true;
   });
 
-  if (publication.status === 'created') return publication;
+  if (publication.status === 'created' || publication.status === 'simulated') return publication;
 
   // A second HTTP request arriving before the first has returned must join
   // the existing operation, not start another create request.
@@ -105,8 +108,9 @@ async function publishCandidate(store, roundId, candidateId, startAt, context) {
     try {
       let eventId;
       let eventUrl;
-      if (context.demo) {
-        eventId = 'demo-' + publication.id;
+      const simulated = !context.demo && (context.testMode === true || roundSnapshot.testMode === true);
+      if (context.demo || simulated) {
+        eventId = context.demo ? 'demo-' + publication.id : null;
         eventUrl = null;
       } else {
         const guild = await context.client.guilds.fetch(context.guildId);
@@ -139,7 +143,9 @@ async function publishCandidate(store, roundId, candidateId, startAt, context) {
       }
 
       await updatePublication(store, roundId, publication.id, {
-        eventId, eventUrl, status: 'created', error: null, createdAt: new Date().toISOString(),
+        eventId, eventUrl,
+        status: (!context.demo && (context.testMode === true || roundSnapshot.testMode === true)) ? 'simulated' : 'created',
+        error: null, createdAt: new Date().toISOString(),
       });
       return store.read().rounds.find(r => r.id === roundId)
         .publications.find(p => p.id === publication.id);

@@ -1,7 +1,9 @@
 'use strict';
 
 const state = {
-  me: null, rounds: [], round: null, tab: 'availability',
+  me: null, rounds: [], round: null,
+  tab: ['new','organizer'].includes(new URLSearchParams(location.search).get('view'))
+    ? new URLSearchParams(location.search).get('view') : 'availability',
   day: null, picked: new Set(), slots: {}, votePicked: null,
   persona: localStorage.getItem('winterbot-demo-persona') || 'owner',
 };
@@ -91,13 +93,18 @@ function pickRound(id) {
 }
 function nav(tab) {
   state.tab = tab;
+  const url = new URL(location.href);
+  url.searchParams.delete('view');
+  history.replaceState(null, '', url);
   render();
 }
 function badgeRow() {
   const r = state.round;
   if (!r) return '';
   return '<div class="row"><span class="pill">' + escapeHtml(r.timezone) + '</span>' +
-    '<span class="pill">' + escapeHtml(r.durationMinutes) + '-minute event</span>' +
+    '<span class="pill">' + escapeHtml(r.minDurationMinutes || r.durationMinutes) +
+      ((r.maxDurationMinutes || r.durationMinutes) !== (r.minDurationMinutes || r.durationMinutes)
+        ? '–' + escapeHtml(r.maxDurationMinutes) : '') + '-minute event</span>' +
     '<span class="pill">Max 1 event per day</span></div>';
 }
 function pageHeader(title, description, right = '') {
@@ -135,7 +142,8 @@ function renderChrome() {
     (me.demo ? '' : '<a class="tiny muted" href="/logout">Sign out</a>');
   el('demo-switch').innerHTML = me.demo ? (demoPersonSelect('persona') +
     (me.admin ? '<div style="margin-top:9px">' + btn('↻ Restart demo', 'reset-demo', 'small full') + '</div>' : '')) : '';
-  el('mode-footer').textContent = me.demo ? 'Safe local demo mode' : 'Discord-authenticated';
+  el('mode-footer').textContent = me.demo ? 'Safe local demo mode' :
+    me.testMode ? 'Discord test mode — #bot-logs only' : 'Discord-authenticated';
 }
 function statusOf(date) {
   return state.round.availability[state.me.id]?.[date]?.status || 'unanswered';
@@ -235,9 +243,10 @@ function fitsMyAvailability(option) {
   const entry = entryOf(option.date);
   if (entry.status !== 'available') return false;
   const minute = time => Number(time.split(':')[0]) * 60 + Number(time.split(':')[1]);
-  const start = minute(option.time), end = start + state.round.durationMinutes;
+  const duration = option.durationMinutes || state.round.durationMinutes;
+  const start = minute(option.time), end = start + duration;
   return entry.windows.some(w => minute(w.start) <= start && minute(w.end) >= end &&
-    (w.maxMinutes == null || w.maxMinutes >= state.round.durationMinutes));
+    (w.maxMinutes == null || w.maxMinutes >= duration));
 }
 function renderVoting() {
   const r = state.round, b = r.ballot;
@@ -254,7 +263,8 @@ function renderVoting() {
     html += '<label class="vote-option"><input type="checkbox" class="check" data-vote="' + escapeHtml(o.id) + '"' +
       (state.votePicked.has(o.id) ? ' checked' : '') + '><span><strong>' + escapeHtml(longDate(o.date)) +
       '</strong><small>' + escapeHtml(humanTime(o.startAt, r.timezone)) + '–' +
-      escapeHtml(humanTime(o.endAt, r.timezone)) + ' · ' + escapeHtml(r.timezone) + '</small>' +
+      escapeHtml(humanTime(o.endAt, r.timezone)) + ' · ' +
+      (o.durationMinutes || r.durationMinutes) + ' min · ' + escapeHtml(r.timezone) + '</small>' +
       (fitsMyAvailability(o) ? '<small class="green">Fits your availability</small>' :
         '<small style="color:var(--amber)">Outside your submitted availability</small>') +
       '</span></label>';
@@ -278,10 +288,13 @@ function renderParticipant() {
     html += '<div class="note">' + r.ballot.winnerIds.length + ' voted options survived; options that were never voted on remain available to the organizer.</div>';
   }
   if (r.publications.length) {
-    html += '<h3>Scheduled events</h3>' + r.publications.map(p => '<div class="timeline-row"><strong>' +
+    html += '<h3>' + (r.testMode ? 'Test event simulations' : 'Scheduled events') +
+      '</h3>' + r.publications.map(p => '<div class="timeline-row"><strong>' +
       escapeHtml(longDate(p.date)) + ' at ' + escapeHtml(humanTime(p.startAt, r.timezone)) +
       '</strong>' + (p.eventUrl ? '<a href="' + escapeHtml(p.eventUrl) +
-      '" target="_blank" rel="noopener">View Discord event ↗</a>' : '<span class="pill ok">Demo event created</span>') +
+      '" target="_blank" rel="noopener">View Discord event ↗</a>' :
+      p.status === 'simulated' ? '<span class="pill warn">TEST only — no event created</span>' :
+      '<span class="pill ok">Demo event created</span>') +
       '</div>').join('');
   }
   html += '</div></div>';
@@ -335,7 +348,8 @@ function candidateBoard() {
       '</h3><span class="pill">1 event max</span></div><div class="candidates">';
     grouped[date].forEach(c => {
       const publishedHere = publicationByDate.get(c.date);
-      const retry = publishedHere && publishedHere.candidateId === c.id && publishedHere.status !== 'created';
+      const retry = publishedHere && publishedHere.candidateId === c.id &&
+        !['created','simulated'].includes(publishedHere.status);
       const scheduled = Boolean(publishedHere && !retry);
       const attendees = r.participants.filter(p => c.availableIds.includes(p.id)).map(p => escapeHtml(p.name));
       const share = r.participants.length ? Math.round(c.count / r.participants.length * 100) : 0;
@@ -350,7 +364,8 @@ function candidateBoard() {
             '"' + (state.picked.has(c.id) ? ' checked' : '') + '><strong>Select</strong></label>' : '') +
         '<div><h3>' + escapeHtml(c.slots[0].time) +
         (c.slots.length > 1 ? '–' + escapeHtml(c.slots[c.slots.length - 1].time) : '') +
-        '</h3><span class="small muted">Possible start times · ' + r.durationMinutes + '-min event</span></div></div>' +
+        '</h3><span class="small muted">Possible start times · ' +
+        (c.durationMinutes || r.durationMinutes) + '-min event</span></div></div>' +
         '<div class="score ' + (c.count === r.bestAttendance ? 'green' : '') + '">' +
         c.count + '/' + r.participants.length +
         '<div class="tiny muted">' + share + '% of participants</div></div></div>';
@@ -410,13 +425,68 @@ function renderOrganizer() {
           escapeHtml(p.status) + (p.error ? ' · ' + escapeHtml(p.error) : '') +
           '</div></div>' + (p.eventUrl ? '<a href="' + escapeHtml(p.eventUrl) +
           '" target="_blank" rel="noopener">Discord ↗</a>' :
-          p.status === 'created' ? '<span class="pill ok">Demo event</span>' : '') + '</div>').join('') + '</div></div>';
+          p.status === 'simulated' ? '<span class="pill warn">TEST only · no event created</span>' :
+          p.status === 'created' ? '<span class="pill ok">' +
+            (state.me.demo ? 'Demo event' : 'Discord event') + '</span>' : '') + '</div>').join('') + '</div></div>';
     }
     if (r.phase === 'voting') html += '<div class="row">' + btn('Update Discord announcement', 'announce', '',
       state.me.demo ? 'disabled' : '') + '</div>';
   }
   return html + '</div>';
 }
+function setupDates() {
+  const target = el('schedule-dates');
+  const startInput = el('startDate'), endInput = el('endDate');
+  if (!target || !startInput || !endInput) return;
+  const saved = new Map([...target.querySelectorAll('[data-planning-date]')].map(node => {
+    const date = node.dataset.planningDate;
+    return [date, {
+      selected: node.querySelector('[data-include-date]')?.checked ?? true,
+      limited: node.querySelector('[data-limit-date]')?.checked ?? false,
+      start: node.querySelector('[data-limited-start]')?.value || '18:00',
+      end: node.querySelector('[data-limited-end]')?.value || '23:00',
+    }];
+  }));
+  const startMs = Date.parse(startInput.value + 'T12:00:00Z');
+  const endMs = Date.parse(endInput.value + 'T12:00:00Z');
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs ||
+      (endMs - startMs) / 86400000 >= 45) {
+    target.innerHTML = '<div class="note">Choose a valid date range of up to 45 days.</div>';
+    return;
+  }
+  let html = '';
+  for (let ms = startMs; ms <= endMs; ms += 86400000) {
+    const date = new Date(ms).toISOString().slice(0, 10);
+    const old = saved.get(date) || { selected:true, limited:false, start:'18:00', end:'23:00' };
+    html += '<div class="schedule-day" data-planning-date="' + date + '">' +
+      '<label class="choice schedule-day-date"><input type="checkbox" class="check" data-include-date ' +
+      (old.selected ? 'checked' : '') + '><span>' + escapeHtml(longDate(date)) + '</span></label>' +
+      '<label class="choice small"><input type="checkbox" class="check" data-limit-date ' +
+      (old.limited ? 'checked' : '') + '>Restrict hours</label>' +
+      '<div class="schedule-day-times" ' + (!old.limited ? 'hidden' : '') + '>' +
+      '<div class="field"><label>Earliest start</label><select class="select" data-limited-start>' +
+      timeOptions(old.start, false) + '</select></div>' +
+      '<div class="field"><label>Latest end</label><select class="select" data-limited-end>' +
+      timeOptions(old.end, true) + '</select></div></div></div>';
+  }
+  target.innerHTML = html;
+}
+function getSchedulingDaySettings(form) {
+  const selectedDates = [], dayLimits = {};
+  for (const node of form.querySelectorAll('[data-planning-date]')) {
+    if (!node.querySelector('[data-include-date]').checked) continue;
+    const date = node.dataset.planningDate;
+    selectedDates.push(date);
+    if (!node.querySelector('[data-limit-date]').checked) continue;
+    dayLimits[date] = {
+      start:node.querySelector('[data-limited-start]').value,
+      end:node.querySelector('[data-limited-end]').value,
+    };
+  }
+  if (!selectedDates.length) throw new Error('Select at least one possible event date.');
+  return { selectedDates, dayLimits };
+}
+
 function newRoundForm() {
   const today = new Date();
   const dateFrom = new Date(today.getTime() + 6 * 86400000).toISOString().slice(0, 10);
@@ -425,16 +495,25 @@ function newRoundForm() {
   html += '<form id="create-round" class="card flow"><div class="panel-title"><h2>Event details</h2>' +
     '<span class="pill accent">72h collection · 24h voting</span></div>';
   html += '<div class="field"><label for="title">Event title</label><input id="title" name="title" required minlength="3" maxlength="90" value="Game Night"></div>';
+  html += state.me?.testMode ? '<div class="info-line"><strong>TEST MODE ACTIVE:</strong> setup, invitations, votes and simulated approvals stay in #bot-logs. League and Public receive nothing; no real Discord Scheduled Event will be created.</div>' : '';
   html += '<div class="grid-2"><div class="field"><label for="startDate">First possible date</label><input type="date" id="startDate" name="startDate" value="' +
     dateFrom + '" required></div><div class="field"><label for="endDate">Last possible date</label><input type="date" id="endDate" name="endDate" value="' +
     dateTo + '" required></div></div>';
+  html += '<div class="field"><label>Possible event dates and optional hours</label>' +
+    '<span class="help">Choose which dates to include. Each date may optionally restrict how early or late an event can run. Leave Restrict hours off for the entire day.</span>' +
+    '<div id="schedule-dates" class="schedule-date-list"></div></div>';
   html += '<div class="grid-2"><div class="field"><label for="timezone">Planning time zone</label><input id="timezone" name="timezone" value="Europe/Amsterdam" required></div>' +
-    '<div class="field"><label for="durationMinutes">Event duration (minutes)</label><input id="durationMinutes" name="durationMinutes" type="number" min="15" max="720" step="15" value="120" required></div></div>';
+    '<div class="field"><label for="minDurationMinutes">Minimum event duration (minutes)</label><input id="minDurationMinutes" name="minDurationMinutes" type="number" min="15" max="720" step="15" value="120" required></div></div>';
+  html += '<div class="grid-2"><div class="field"><label for="maxDurationMinutes">Maximum event duration (minutes)</label><input id="maxDurationMinutes" name="maxDurationMinutes" type="number" min="15" max="720" step="15" value="120" required></div>' +
+    '<div class="field"><label for="durationStepMinutes">Duration precision</label><select id="durationStepMinutes" name="durationStepMinutes"><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">60 minutes</option></select></div></div>';
   html += '<div class="grid-2"><div class="field"><label for="collectionHours">Availability window (hours)</label><input id="collectionHours" name="collectionHours" type="number" min=".5" max="336" step=".5" value="72"></div>' +
     '<div class="field"><label for="voteHours">Optional vote window (hours)</label><input id="voteHours" name="voteHours" type="number" min=".5" max="168" step=".5" value="24"></div></div>';
   html += '<div class="grid-2"><div class="field"><label for="stepMinutes">Start-time precision</label><select id="stepMinutes" name="stepMinutes"><option value="15">15 minutes</option>' +
     '<option value="30" selected>30 minutes</option><option value="60">60 minutes</option></select></div>' +
     '<div class="field"><label for="threshold">Near-best threshold (%)</label><input type="number" id="threshold" name="threshold" min="0" max="100" value="90"></div></div>';
+  html += '<div class="field"><label for="destination">Member invitation channel</label>' +
+    '<select id="destination" name="destination" class="select"><option value="league" selected>League — default</option><option value="public">Public</option></select>' +
+    '<span class="help">League and Public receive only the availability invitation and confirmed-event announcements. In TEST mode, both are redirected exclusively to #bot-logs.</span></div>';
   html += '<div class="field"><label for="participants">Optional fixed participants</label><textarea id="participants" name="participants" placeholder="Discord user ID,display name (one per line)"></textarea>' +
     '<span class="help">Leave empty for open enrollment. With a fixed list, only those users can submit availability and vote. IDs in live mode must be Discord user IDs.</span></div>';
   html += '<div class="field"><label for="voiceChannelId">Discord voice channel ID (optional)</label>' +
@@ -451,6 +530,7 @@ function render() {
   renderChrome();
   if (state.tab === 'new' && state.me.admin) {
     el('app-content').innerHTML = newRoundForm();
+    setupDates();
   } else if (!state.round) {
     el('app-content').innerHTML = pageHeader('Welcome to WinterBot', 'Start by creating a planning round.') +
       '<div class="empty"><h2>No planning rounds yet</h2><p>Create your first round to begin collecting availability.</p>' +
@@ -593,9 +673,10 @@ async function handleAction(node) {
     const dates = selected.map(s => s.date);
     if (new Set(dates).size !== dates.length) return announce('Only one scheduled event per calendar day. Choose one option from each day.', true);
     if (!confirm('Create ' + selected.length + ' scheduled event(s)' +
-      (state.me.demo ? ' in safe demo mode' : ' on Discord') + '?')) return;
+      (state.me.demo ? ' in safe demo mode' : state.me.testMode ?
+        ' as TEST simulations in #bot-logs (no real events)' : ' on Discord') + '?')) return;
     const retryIds = new Set(selected.filter(s => r.publications.some(p =>
-      p.candidateId === s.candidateId && p.status !== 'created')).map(s => s.candidateId));
+      p.candidateId === s.candidateId && !['created','simulated'].includes(p.status))).map(s => s.candidateId));
     if (!state.me.demo && retryIds.size > 0 &&
       !confirm('IMPORTANT: An earlier event-creation attempt may already have succeeded. Check the Discord Scheduled Events list BEFORE retrying. Have you verified that no duplicate event exists?')) return;
     for (const s of selected) {
@@ -608,7 +689,8 @@ async function handleAction(node) {
       }
     }
     state.picked.clear();
-    return announce(selected.length + (state.me.demo ? ' simulated event(s) created.' : ' Discord event(s) created.'));
+    return announce(selected.length + (state.me.demo ? ' demo event(s) created.' :
+      state.me.testMode ? ' TEST simulation(s) posted to #bot-logs.' : ' Discord event(s) created.'));
   }
 }
 document.addEventListener('click', event => {
@@ -627,6 +709,12 @@ document.addEventListener('change', event => {
     state.picked.clear();
     state.votePicked = null;
     return refresh().catch(error => announce(error.message, true));
+  }
+  if (node.id === 'startDate' || node.id === 'endDate') return setupDates();
+  if (node.hasAttribute('data-limit-date')) {
+    const controls = node.closest('.schedule-day').querySelector('.schedule-day-times');
+    controls.hidden = !node.checked;
+    return;
   }
   if (node.id === 'round-picker') return pickRound(node.value);
   if (node.id === 'mobile-nav') return nav(node.value);
@@ -658,6 +746,13 @@ document.addEventListener('submit', event => {
   event.preventDefault();
   const form = event.target;
   const fd = new FormData(form);
+  let daySettings;
+  try {
+    daySettings = getSchedulingDaySettings(form);
+  } catch(error) {
+    announce(error.message,true);
+    return;
+  }
   const pairs = String(fd.get('participants') || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   const participants = pairs.map(s => {
     const parts = s.split(',');
@@ -665,7 +760,12 @@ document.addEventListener('submit', event => {
   });
   const body = {
     title: fd.get('title'), startDate: fd.get('startDate'), endDate: fd.get('endDate'),
-    timezone: fd.get('timezone'), durationMinutes: Number(fd.get('durationMinutes')),
+    timezone: fd.get('timezone'),
+    minDurationMinutes: Number(fd.get('minDurationMinutes')),
+    maxDurationMinutes: Number(fd.get('maxDurationMinutes')),
+    durationStepMinutes: Number(fd.get('durationStepMinutes')),
+    destination: fd.get('destination'),
+    ...daySettings,
     stepMinutes: Number(fd.get('stepMinutes')), collectionHours: Number(fd.get('collectionHours')),
     voteHours: Number(fd.get('voteHours')), threshold: Number(fd.get('threshold')) / 100,
     participants, location: fd.get('location'), voiceChannelId: fd.get('voiceChannelId'),
@@ -678,8 +778,13 @@ document.addEventListener('submit', event => {
     });
     state.day = result.round.dates[0]; state.tab = 'organizer'; state.picked.clear();
     const url = new URL(location.href); url.searchParams.set('round', state.round.id);
+    url.searchParams.delete('view');
     history.replaceState(null, '', url);
-    render(); announce('Planning round created. You can now share the invitation.');
+    render();
+    if (result.warning) announce(result.warning,true);
+    else if (state.me.demo) announce('Demo round created; Discord channels remain untouched.');
+    else announce(state.me.testMode ? 'TEST invitation posted in #bot-logs.' :
+      'Availability invitation posted to the selected League/Public channel.');
   }).catch(error => announce(error.message, true)).finally(() => {
     if (submit.isConnected) submit.disabled = false;
   });
@@ -691,7 +796,9 @@ refresh().catch(error => {
   if (error.message.includes('sign in') || error.message.includes('401')) {
     el('app-content').innerHTML = '<div class="card"><h1>Welcome to WinterBot</h1>' +
       '<p>Sign in with Discord to set your availability and take part in event planning.</p>' +
-      '<p><a class="btn primary" href="/login?round=' + escapeHtml(new URLSearchParams(location.search).get('round') || '') + '">Sign in with Discord</a></p></div>';
+      '<p><a class="btn primary" href="/login?round=' + escapeHtml(new URLSearchParams(location.search).get('round') || '') +
+      '&view=' + escapeHtml(new URLSearchParams(location.search).get('view') || '') +
+      '">Sign in with Discord</a></p></div>';
     return;
   }
   el('app-content').innerHTML = '<div class="empty"><h2>Could not load planner</h2><p>' +
