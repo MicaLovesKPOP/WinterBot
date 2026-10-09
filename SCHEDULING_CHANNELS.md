@@ -59,10 +59,13 @@ Guaranteed behavior:
 
 The guild, Mod, League and Public IDs above are built in as defaults. The actual #bot-logs ID comes from WinterBot's existing LOG_CHANNEL_ID.
 
-The remaining NON-SECRET Discord role IDs are:
+The existing, NON-SECRET Discord role IDs are now provided as built-in defaults:
 
-    SCHEDULING_MANAGEMENT_ROLE_ID=YOUR_MANAGEMENT_ROLE_ID
-    SCHEDULING_VERIFIED_ROLE_IDS=FIRST_CHECKMARK_ROLE_ID,SECOND_CHECKMARK_ROLE_ID
+    Management: 332571825127292929
+    Checkmark 1: 826810836302823484
+    Checkmark 2: 826799764829372416
+
+No additional role-ID environment variables are necessary for this server. SCHEDULING_MANAGEMENT_ROLE_ID and SCHEDULING_VERIFIED_ROLE_IDS may still override the defaults if the roles change. Both checkmark roles remain mandatory for every participant.
 
 When the operator is ready, set HTTPS and Discord OAuth values privately in the bot-host environment:
 
@@ -79,6 +82,8 @@ For the production bot, allow View Channel, Send Messages, Read Message History 
 
 Missing or incorrect optional scheduling configuration must never crash the ordinary WinterBot subscriber tracker. Until all prerequisites are ready, leave SCHEDULING_ENABLED=0.
 
+**Automatic deployment is already configured separately:** DiscordBotHosting's existing AUTO_UPDATE=1 / GIT_ADDRESS / BRANCH flow can pull successful, sufficiently old main-branch commits during WinterBot's daily 04:45 Europe/Amsterdam check, followed by Pterodactyl restart. This deploys code only. It does not set new environment variables, provision an HTTPS planner host, or register Discord OAuth redirect URLs. Those still require explicit one-time hosting/application setup.
+
 ## Embedded Discord Activity work
 
 This branch implements the responsive browser planner, authenticated backend, slash-command setup links, channel presentation, permissions and test mode. It does **not** yet merge the separately developed Discord Embedded App SDK Activity launcher. The Activity should reuse these server-side restrictions rather than trust client-supplied roles or destinations.
@@ -93,4 +98,4 @@ Tests cover role checks, Mod vs #bot-logs command gating, date and hour limits, 
 
 To stop testing, set SCHEDULING_TEST_MODE=0 and restart the bot. The old test rounds remain archived in the data but inactive. To disable scheduling entirely, set SCHEDULING_ENABLED=0 and restart. These changes never delete existing Discord Scheduled Events.
 
-Keep this as a separate review branch until combined with the ongoing Discord Activity implementation; do not overwrite the unfinished Activity branch.
+The old uncommitted Discord Activity prototype was discarded at the user's request. The live #bot-logs scheduling test uses Discord slash commands and a responsive browser planner; an embedded Discord Activity is a separate future feature.

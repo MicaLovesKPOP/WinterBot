@@ -8,6 +8,10 @@ const CHANNELS = Object.freeze({
   league: '387323214105411599',
   public: '343084103228456970',
 });
+const DEFAULT_ROLES = Object.freeze({
+  management: '332571825127292929',
+  verification: Object.freeze(['826810836302823484', '826799764829372416']),
+});
 const SNOWFLAKE = /^\d{15,22}$/;
 
 function assertRule(condition, message, status = 403) {
@@ -26,8 +30,9 @@ function configureChannelPolicy(options, env = process.env) {
   const leagueChannelId = String(env.SCHEDULING_LEAGUE_CHANNEL_ID || CHANNELS.league);
   const publicChannelId = String(env.SCHEDULING_PUBLIC_CHANNEL_ID || CHANNELS.public);
   const logChannelId = String(options.logChannelId || '');
-  const managementRoleId = String(env.SCHEDULING_MANAGEMENT_ROLE_ID || '').trim();
-  const verifiedRoleIds = getRoleIds(env.SCHEDULING_VERIFIED_ROLE_IDS);
+  const managementRoleId = String(env.SCHEDULING_MANAGEMENT_ROLE_ID || DEFAULT_ROLES.management).trim();
+  const verifiedRoleIds = getRoleIds(env.SCHEDULING_VERIFIED_ROLE_IDS ||
+    DEFAULT_ROLES.verification.join(','));
   const allowed = [modChannelId, leagueChannelId, publicChannelId, logChannelId];
   assertRule(allowed.every(x => SNOWFLAKE.test(x)) && new Set(allowed).size === 4,
     'Scheduling requires four distinct, valid channels: Mod, League, Public and #bot-logs.', 400);
@@ -126,7 +131,7 @@ async function validateBotChannels(client, policy, options = {}) {
 }
 
 module.exports = {
-  CHANNELS, configureChannelPolicy, getRoleIds, roleHas, isOrganizerMember,
+  CHANNELS, DEFAULT_ROLES, configureChannelPolicy, getRoleIds, roleHas, isOrganizerMember,
   isVerifiedMember, memberCanSee, destinationFor, validateMemberAccess, mayUseSetupInteraction,
   validateBotChannels, assertRule,
 };
