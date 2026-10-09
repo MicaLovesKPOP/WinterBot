@@ -113,9 +113,32 @@ async function run() {
     assert.equal(resetData.rounds[0].phase,'collecting');
     info('Organizer can restart the demo with fresh sample data');
 
+    const smallCtx=await browser.newContext({viewport:{width:320,height:720},isMobile:true});
+    const smallPage=await smallCtx.newPage();
+    smallPage.on('pageerror',error=>pageErrors.push(error.message));
+    await smallPage.goto(base,{waitUntil:'networkidle'});
+    await smallPage.locator('#mobile-nav').selectOption('new');
+    await smallPage.locator('[data-planning-date]').first().waitFor();
+    const setupOverflow=await smallPage.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
+    assert.ok(setupOverflow<=1,'320px mobile setup wizard must not overflow: '+setupOverflow);
+    await smallPage.screenshot({path:path.join(process.cwd(),'preview-screens','mobile-setup.png'),fullPage:true});
+    await smallCtx.close();
+    info('320px mobile setup wizard has no page-wide horizontal overflow');
+
     await page.locator('#nav-new').click();
     await page.locator('#title').fill('Voice chat event');
     await page.locator('#voiceChannelId').fill('123456789012345678');
+    const dateRows=page.locator('[data-planning-date]');
+    assert.equal(await dateRows.count(),3,'three default setup dates should appear');
+    const firstDate=await dateRows.first().getAttribute('data-planning-date');
+    const secondDate=await dateRows.nth(1).getAttribute('data-planning-date');
+    await dateRows.nth(1).locator('[data-include-date]').uncheck();
+    await dateRows.first().locator('[data-limit-date]').check();
+    await dateRows.first().locator('[data-limited-start]').selectOption('19:00');
+    await dateRows.first().locator('[data-limited-end]').selectOption('23:00');
+    await page.locator('#minDurationMinutes').fill('90');
+    await page.locator('#maxDurationMinutes').fill('150');
+    await page.locator('#destination').selectOption('public');
     assert.equal(await page.locator('#create-round').evaluate(f => f.checkValidity()), true);
     await page.locator('#create-round [type=submit]').click();
     await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'Organizer board', null, { timeout: 15000 });
@@ -126,7 +149,13 @@ async function run() {
     const createdRound=await (await page.request.get(base+'/api/rounds/'+newId,
       {headers:{'X-Demo-User':'owner'}})).json();
     assert.equal(createdRound.round.voiceChannelId,'123456789012345678');
-    info('Organizer can create a round targeting a Discord voice channel');
+    assert.equal(createdRound.round.destination,'public');
+    assert.equal(createdRound.round.minDurationMinutes,90);
+    assert.equal(createdRound.round.maxDurationMinutes,150);
+    assert.ok(createdRound.round.selectedDates.includes(firstDate));
+    assert.ok(!createdRound.round.selectedDates.includes(secondDate));
+    assert.deepEqual(createdRound.round.dayLimits[firstDate],{start:'19:00',end:'23:00'});
+    info('Organizer setup saves individual dates, restricted hours, duration range, destination and voice channel');
   } finally {
     await browser.close();
   }

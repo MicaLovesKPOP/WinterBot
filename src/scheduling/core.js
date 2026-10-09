@@ -29,7 +29,7 @@ function listDays(round) {
   const b = isoDate(round.endDate, round.timezone);
   const dates = [];
   for (let d = a; d.toMillis() <= b.toMillis(); d = d.plus({ days: 1 })) dates.push(d.toISODate());
-  return dates;
+  return Array.isArray(round.selectedDates) ? dates.filter(d => round.selectedDates.includes(d)) : dates;
 }
 function assertParticipant(round, userId) {
   invariant(round.participants.some(p => p.id === String(userId)), 'You are not in this scheduling round.');
@@ -43,8 +43,16 @@ function createRound(input, now = new Date()) {
   invariant(days >= 1 && days <= MAX_DAYS, 'A scheduling round must cover 1–45 days.');
   const title = String(input.title || '').trim();
   invariant(title.length >= 3 && title.length <= 90, 'Title must be 3–90 characters.');
-  const durationMinutes = Number(input.durationMinutes || 120);
-  invariant(Number.isInteger(durationMinutes) && durationMinutes >= 15 && durationMinutes <= 720 && durationMinutes % 15 === 0, 'Event duration must be 15–720 minutes in 15-minute increments.');
+  const durationMinutes = Number(input.durationMinutes || input.minDurationMinutes || 120);
+  const minDurationMinutes = Number(input.minDurationMinutes ?? durationMinutes);
+  const maxDurationMinutes = Number(input.maxDurationMinutes ?? durationMinutes);
+  const durationStepMinutes = Number(input.durationStepMinutes ?? 30);
+  invariant([15,30,60].includes(durationStepMinutes), 'Event duration precision must be 15, 30 or 60 minutes.');
+  invariant(Number.isInteger(minDurationMinutes) && Number.isInteger(maxDurationMinutes) &&
+    minDurationMinutes >= 15 && maxDurationMinutes <= 720 && maxDurationMinutes >= minDurationMinutes &&
+    minDurationMinutes % 15 === 0 && maxDurationMinutes % 15 === 0 &&
+    (maxDurationMinutes-minDurationMinutes) % durationStepMinutes === 0,
+    'Event duration range must be 15–720 minutes in valid increments.');
   const stepMinutes = Number(input.stepMinutes || 30);
   invariant([15, 30, 60].includes(stepMinutes), 'Start-time precision must be 15, 30 or 60 minutes.');
   const collectionHours = Number(input.collectionHours || 72);
@@ -55,6 +63,26 @@ function createRound(input, now = new Date()) {
   invariant(threshold >= 0 && threshold <= 1, 'Attendance threshold must be between 0 and 1.');
   const targetCount = input.targetCount == null ? 5 : Number(input.targetCount);
   invariant(Number.isInteger(targetCount) && targetCount >= 1 && targetCount <= 30, 'Shortlist target must be 1–30.');
+  const allDates = [];
+  for (let d = start; d.toMillis() <= end.toMillis(); d = d.plus({days:1})) allDates.push(d.toISODate());
+  const selectedDates = input.selectedDates == null ? allDates : [...new Set(input.selectedDates)];
+  invariant(Array.isArray(input.selectedDates) || input.selectedDates == null,
+    'Selected dates must be a list.');
+  invariant(selectedDates.length > 0 && selectedDates.length <= 45 &&
+    selectedDates.every(d => typeof d === 'string' && allDates.includes(d)),
+    'Select at least one valid date within the planning period.');
+  selectedDates.sort();
+  const dayLimits = {};
+  for (const [date, bounds] of Object.entries(input.dayLimits || {})) {
+    invariant(selectedDates.includes(date) && bounds && typeof bounds === 'object',
+      'Scheduling time restrictions must refer to a selected date.');
+    const a = minuteOf(String(bounds.start || '00:00'));
+    const b = minuteOf(String(bounds.end || '24:00'), true);
+    invariant(b > a, 'A daily scheduling time restriction must have a positive length.');
+    dayLimits[date] = { start: timeOf(a), end: timeOf(b) };
+  }
+  const destination = String(input.destination || 'league');
+  invariant(['league','public'].includes(destination), 'Choose League or Public for participant invitations.');
   const voiceChannelId = String(input.voiceChannelId || '').trim();
   invariant(!voiceChannelId || /^\d{15,22}$/.test(voiceChannelId), 'Voice channel must be a Discord channel ID.');
   const participants = [];
@@ -69,7 +97,10 @@ function createRound(input, now = new Date()) {
   invariant(participants.length <= MAX_PARTICIPANTS, 'Too many participants.');
   return {
     id: crypto.randomUUID(), title, timezone, startDate: start.toISODate(), endDate: end.toISODate(),
-    durationMinutes, stepMinutes, collectionHours, voteHours, threshold, targetCount,
+    durationMinutes, minDurationMinutes, maxDurationMinutes, durationStepMinutes,
+    selectedDates, dayLimits, destination, testMode: input.testMode === true,
+    submissionChannelId: input.submissionChannelId || null,
+    stepMinutes, collectionHours, voteHours, threshold, targetCount,
     location: String(input.location || 'Discord').trim().slice(0, 100), voiceChannelId,
     description: String(input.description || '').slice(0, 1000),
     rosterMode: participants.length ? 'fixed' : 'open', participants, availability: {}, phase: 'collecting',
@@ -129,53 +160,84 @@ function localTime(date, minute, zone) {
 }
 function candidateSlots(round, now = new Date()) {
   const result = [];
-  const duration = round.durationMinutes;
+  const shortest = round.minDurationMinutes || round.durationMinutes;
+  const longest = round.maxDurationMinutes || round.durationMinutes;
+  const durationStep = round.durationStepMinutes || 30;
+  const nowMillis = new Date(now).getTime();
   for (const date of listDays(round)) {
-    for (let m = 0; m + duration <= 1440; m += round.stepMinutes) {
-      const start = localTime(date, m, round.timezone);
-      if (!start || start.toMillis() <= new Date(now).getTime() + 60000) continue;
-      const end = start.plus({ minutes: duration });
-      const em = m + duration;
-      const ed = em === 1440 ? isoDate(date, round.timezone).plus({ days: 1 }).toISODate() : date;
-      const et = em === 1440 ? '00:00' : timeOf(em);
-      // Avoid silently misrepresenting real elapsed time during DST gaps or folds.
-      if (end.toISODate() !== ed || end.toFormat('HH:mm') !== et || end.offset !== start.offset) continue;
-      const availableIds = round.participants.filter(p => {
-        const entry = round.availability[p.id]?.[date];
-        if (!entry || entry.status !== 'available') return false;
-        return entry.windows.some(w => minuteOf(w.start) <= m &&
-          minuteOf(w.end, true) >= m + duration &&
-          (w.maxMinutes == null || w.maxMinutes >= duration));
-      }).map(p => p.id);
-      if (availableIds.length) result.push({
-        date, startAt: start.toUTC().toISO(), endAt: end.toUTC().toISO(),
-        time: timeOf(m), minute: m, availableIds, count: availableIds.length,
-      });
+    const allowed = round.dayLimits?.[date] || { start: '00:00', end: '24:00' };
+    const from = minuteOf(allowed.start);
+    const until = minuteOf(allowed.end, true);
+    for (let duration = shortest; duration <= longest; duration += durationStep) {
+      for (let m = Math.ceil(from / round.stepMinutes) * round.stepMinutes;
+        m + duration <= until; m += round.stepMinutes) {
+        const start = localTime(date, m, round.timezone);
+        if (!start || start.toMillis() <= nowMillis + 60000) continue;
+        const end = start.plus({ minutes: duration });
+        const em = m + duration;
+        const ed = em === 1440 ? isoDate(date, round.timezone).plus({ days: 1 }).toISODate() : date;
+        const et = em === 1440 ? '00:00' : timeOf(em);
+        if (end.toISODate() !== ed || end.toFormat('HH:mm') !== et || end.offset !== start.offset) continue;
+        const availableIds = round.participants.filter(p => {
+          const entry = round.availability[p.id]?.[date];
+          if (!entry || entry.status !== 'available') return false;
+          return entry.windows.some(w => minuteOf(w.start) <= m &&
+            minuteOf(w.end, true) >= m + duration &&
+            (w.maxMinutes == null || w.maxMinutes >= duration));
+        }).map(p => p.id);
+        if (availableIds.length) result.push({
+          date, startAt: start.toUTC().toISO(), endAt: end.toUTC().toISO(),
+          time: timeOf(m), minute: m, durationMinutes: duration,
+          availableIds, count: availableIds.length,
+        });
+      }
     }
   }
   return result;
 }
 function calculateCandidates(round, now = new Date()) {
   const raw = candidateSlots(round, now);
-  const groups = [];
+  // A shorter slot with exactly the same attendees and start time as a longer
+  // one offers no attendance benefit. Retain the longer duration instead.
+  const bestByStartAndPeople = new Map();
   for (const slot of raw) {
+    const key = slot.date + '|' + slot.startAt + '|' + slot.availableIds.join(',');
+    const previous = bestByStartAndPeople.get(key);
+    if (!previous || slot.durationMinutes > previous.durationMinutes) {
+      bestByStartAndPeople.set(key, slot);
+    }
+  }
+  const slots = [...bestByStartAndPeople.values()].sort((a, b) =>
+    a.date.localeCompare(b.date) ||
+    b.durationMinutes - a.durationMinutes ||
+    a.minute - b.minute
+  );
+  const groups = [];
+  for (const slot of slots) {
     const prev = groups[groups.length - 1];
-    if (prev && prev.date === slot.date && prev.availableIds.join(',') === slot.availableIds.join(',') &&
+    if (prev && prev.date === slot.date && prev.durationMinutes === slot.durationMinutes &&
+      prev.availableIds.join(',') === slot.availableIds.join(',') &&
       slot.minute === prev.lastMinute + round.stepMinutes) {
       prev.slots.push({ startAt: slot.startAt, endAt: slot.endAt, time: slot.time });
       prev.lastMinute = slot.minute;
-    } else groups.push({
-      id: '', date: slot.date, availableIds: slot.availableIds, count: slot.count,
-      lastMinute: slot.minute, slots: [{ startAt: slot.startAt, endAt: slot.endAt, time: slot.time }],
-    });
+    } else {
+      groups.push({
+        id: '', date: slot.date, availableIds: slot.availableIds, count: slot.count,
+        durationMinutes: slot.durationMinutes, lastMinute: slot.minute,
+        slots: [{ startAt: slot.startAt, endAt: slot.endAt, time: slot.time }],
+      });
+    }
   }
-  for (const g of groups) {
-    g.id = crypto.createHash('sha256').update(round.id + ':' + g.date + ':' + g.slots[0].startAt).digest('hex').slice(0, 16);
-    delete g.lastMinute;
+  for (const group of groups) {
+    group.id = crypto.createHash('sha256').update(
+      round.id + ':' + group.date + ':' + group.durationMinutes + ':' + group.slots[0].startAt
+    ).digest('hex').slice(0, 16);
+    delete group.lastMinute;
   }
   const best = Math.max(0, ...groups.map(g => g.count));
   const eligible = groups.filter(g => best > 0 && g.count / best >= round.threshold)
-    .sort((a, b) => b.count - a.count || a.date.localeCompare(b.date) || a.slots[0].time.localeCompare(b.slots[0].time));
+    .sort((a, b) => b.count - a.count || b.durationMinutes - a.durationMinutes ||
+      a.date.localeCompare(b.date) || a.slots[0].time.localeCompare(b.slots[0].time));
   const selected = [];
   for (const group of eligible) {
     if (group.count === best || selected.length < round.targetCount) selected.push(group);
@@ -216,7 +278,8 @@ function startVote(round, selected, now = new Date()) {
     invariant(!ids.has(candidate.id), 'Choose each candidate only once.');
     ids.add(candidate.id);
     return { id: candidate.id, candidateId: candidate.id, date: candidate.date,
-      startAt: slot.startAt, endAt: slot.endAt, time: slot.time, votes: 0 };
+      startAt: slot.startAt, endAt: slot.endAt, time: slot.time,
+      durationMinutes: candidate.durationMinutes || round.durationMinutes, votes: 0 };
   });
   round.ballot = {
     options, votes: {}, openedAt: new Date(now).toISOString(),

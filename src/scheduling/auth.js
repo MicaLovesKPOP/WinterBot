@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { PermissionFlagsBits } = require('discord.js');
+const { isOrganizerMember, isVerifiedMember, memberCanSee } = require('./channelPolicy');
 
 function cookieMap(req) {
   const pairs = String(req.headers.cookie || '').split(';');
@@ -51,7 +51,8 @@ function createAuth(options) {
       const requested = String(req.headers['x-demo-user'] || 'owner');
       const person = demoPeople.find(p => p.id === requested);
       if (!person) throw Object.assign(new Error('Unknown demo participant.'), { status: 401 });
-      return { id: person.id, name: person.name, admin: Boolean(person.admin), demo: true };
+      return { id: person.id, name: person.name, admin: Boolean(person.admin),
+        verified: true, allowedChannelIds: [], demo: true };
     }
     const value = cookieMap(req).winterbot_session;
     if (!value) return null;
@@ -69,7 +70,7 @@ function createAuth(options) {
     const session = getSession(req);
     if (!session || demo) return session;
     const cached = memberAuthCache.get(session.id);
-    if (cached && cached.expiresAt > Date.now()) return { ...session, admin: cached.admin };
+    if (cached && cached.expiresAt > Date.now()) return { ...session, ...cached.permissions };
     const guild = await options.client.guilds.fetch(options.guildId);
     let member;
     try {
@@ -82,13 +83,26 @@ function createAuth(options) {
       memberAuthCache.delete(session.id);
       return null;
     }
-    const admin = guild.ownerId === session.id || admins.has(session.id) ||
-      member.permissions.has(PermissionFlagsBits.ManageGuild) ||
-      member.permissions.has(PermissionFlagsBits.ManageEvents) ||
-      member.permissions.has(PermissionFlagsBits.Administrator);
-    memberAuthCache.set(session.id, { admin, expiresAt: Date.now() + MEMBER_AUTH_CACHE_MS });
+    const policy = options.policy;
+    let permissions;
+    if (policy) {
+      const [league, publicChannel, logs] = await Promise.all([
+        guild.channels.fetch(policy.leagueChannelId), guild.channels.fetch(policy.publicChannelId),
+        guild.channels.fetch(policy.logChannelId),
+      ]);
+      permissions = {
+        admin: isOrganizerMember(member, policy, guild.ownerId),
+        verified: isVerifiedMember(member, policy),
+        allowedChannelIds: [league, publicChannel, logs].filter(channel =>
+          channel && memberCanSee(member, channel)).map(channel => channel.id),
+      };
+    } else {
+      permissions = { admin: guild.ownerId === session.id || admins.has(session.id),
+        verified: true, allowedChannelIds: [] };
+    }
+    memberAuthCache.set(session.id, { permissions, expiresAt: Date.now() + MEMBER_AUTH_CACHE_MS });
     if (memberAuthCache.size > 512) memberAuthCache.delete(memberAuthCache.keys().next().value);
-    return { ...session, admin };
+    return { ...session, ...permissions };
   }
   function requireOrigin(req) {
     if (demo) return;
@@ -98,8 +112,11 @@ function createAuth(options) {
     }
   }
   function login(req, res) {
-    const requestedRound = new URL(req.url, base).searchParams.get('round') || '';
+    const query = new URL(req.url, base).searchParams;
+    const requestedRound = query.get('round') || '';
+    const requestedView = query.get('view') || '';
     const returnRound = /^[a-f0-9-]{36}$/.test(requestedRound) ? requestedRound : '';
+    const returnView = ['new','organizer'].includes(requestedView) ? requestedView : '';
     const state = crypto.randomBytes(24).toString('base64url');
     const url = new URL('https://discord.com/oauth2/authorize');
     url.searchParams.set('client_id', options.clientId);
@@ -112,6 +129,7 @@ function createAuth(options) {
       'Set-Cookie': [
         headerCookie('winterbot_state', state, { secure, maxAge: 600 }),
         headerCookie('winterbot_return', returnRound, { secure, maxAge: 600 }),
+        headerCookie('winterbot_view', returnView, { secure, maxAge: 600 }),
       ],
       'Cache-Control': 'no-store',
     });
@@ -153,12 +171,17 @@ function createAuth(options) {
       exp: Date.now() + 7 * 86400000,
     })).toString('base64url');
     const requestedRound = cookieMap(req).winterbot_return || '';
-    const returnLocation = /^[a-f0-9-]{36}$/.test(requestedRound) ? '/?round=' + encodeURIComponent(requestedRound) : '/';
+    const requestedView = cookieMap(req).winterbot_view || '';
+    const returnParams = new URLSearchParams();
+    if (/^[a-f0-9-]{36}$/.test(requestedRound)) returnParams.set('round',requestedRound);
+    if (['new','organizer'].includes(requestedView)) returnParams.set('view',requestedView);
+    const returnLocation = '/' + (returnParams.size ? '?' + returnParams.toString() : '');
     res.writeHead(302, {
       Location: returnLocation,
       'Set-Cookie': [
         headerCookie('winterbot_state', '', { secure, clear: true }),
         headerCookie('winterbot_return', '', { secure, clear: true }),
+        headerCookie('winterbot_view', '', { secure, clear: true }),
         headerCookie('winterbot_session', payload + '.' + sign(payload, options.sessionSecret), { secure }),
       ],
       'Cache-Control': 'no-store',

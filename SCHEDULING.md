@@ -32,6 +32,10 @@ The preview seeds a Game Night round with eight people. Suggested walk-through:
 
 Restarting the demo preserves its local state. To replay the full walkthrough, switch to Organizer and press **Restart demo** (with confirmation). This resets sample planning rounds, ballots and simulated events only. Alternatively, stop the demo, move aside the ignored scheduling-demo.json and scheduling-demo.json.bak files, and start again. Do not delete real scheduling.json.
 
+## Discord channel routing and test mode
+
+The latest branch implements /schedule create and /schedule manage as Management-only commands in the Mod channel, with member availability invitations and confirmed-event announcements in League by default or Public when selected. The test-mode flag reroutes every stage to #bot-logs and replaces real event creation with clearly marked simulations. See **[SCHEDULING_CHANNELS.md](SCHEDULING_CHANNELS.md)** for exact channel IDs, both verification-role requirements, operational modes, secrets to enter privately later, and test/rollback procedure.
+
 ## Behaviour and design
 
 ### Availability
@@ -75,7 +79,7 @@ Restarting the demo preserves its local state. To replay the full walkthrough, s
 - Every deadline, permission check, vote, selected option and day limit is validated on the server.
 - Live publishing persists a unique **pending intent** first, then looks for the intent marker in an existing Discord Scheduled Event before creating anything. The marker is always retained even when the event description reaches Discord's length limit. Concurrent requests for one intent share the same in-flight operation; uncertain outcomes require Discord reconciliation and explicitly confirmed retry before another creation attempt.
 - Uncertain Discord failures are stored with needs_attention and may be reconciled. Before forcing a retry, the organizer must confirm that no matching Discord event already exists. A marker in a different WinterBot event on the same date also blocks publication, including after a lost state-file recovery.
-- Live OAuth2 requests Discord identity, then verifies guild membership. Organizers require server ownership, Manage Server, Manage Events or an explicit configured admin ID.
+- Live OAuth2 requests Discord identity and verifies current guild membership, the configured Management role for organizers (guild owner also permitted), and both configured verification roles plus channel access for participants.
 - Signed HttpOnly Secure SameSite cookies, OAuth state validation and same-origin mutation restrictions protect the live browser API.
 - The local demo accepts identity switching but binds **only to localhost** and never creates real Discord events. Do not tunnel it onto the public internet.
 - A live event becomes visible to WinterBot's **existing registration tracker**, which remains separate.
@@ -92,7 +96,9 @@ After verifying in a test server, add the following settings to the existing .en
     DISCORD_CLIENT_SECRET=YOUR_DISCORD_OAUTH_SECRET
     SCHEDULING_SESSION_SECRET=LONG_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
     SCHEDULING_CHANNEL_ID=OPTIONAL_DISCORD_TEXT_CHANNEL_ID
-    SCHEDULING_ADMIN_IDS=OPTIONAL_COMMA_SEPARATED_DISCORD_USER_IDS
+    SCHEDULING_TEST_MODE=1
+    SCHEDULING_MANAGEMENT_ROLE_ID=YOUR_MANAGEMENT_ROLE_ID
+    SCHEDULING_VERIFIED_ROLE_IDS=FIRST_CHECKMARK_ROLE_ID,SECOND_CHECKMARK_ROLE_ID
 
 Discord Developer Portal: register exactly this OAuth2 redirect URI:
 
@@ -100,9 +106,9 @@ Discord Developer Portal: register exactly this OAuth2 redirect URI:
 
 Point your public HTTPS reverse proxy to **127.0.0.1:8791** on the bot's host. Keep TLS and Origin headers intact; the public URL origin must match SCHEDULING_BASE_URL.
 
-Bot permissions: **Create Events** for External events and the ability to view/send messages in the configured announcement channel. Organizer permissions: server owner, Manage Server, Manage Events or an explicitly configured admin ID.
+Bot permissions: **Create Events** for real scheduled events, plus View Channel, Send Messages, Read Message History and Embed Links for the selected posting channels. Organizer permissions: server owner or the configured Management role. Participants require BOTH configured checkmark roles AND access to the chosen invitation channel.
 
-The organizer starts rounds from the authenticated browser UI and may click **Post/update Discord invitation**. Participants receive a Discord message linking to the browser planner. If already announced, the message updates as availability/voting closes. These live Discord paths require testing with valid credentials before production rollout.
+The organizer starts the setup from the Mod channel using /schedule create (or in #bot-logs while test mode is enabled). Creating a round automatically posts its invitation to League by default, Public if explicitly selected, or only #bot-logs during testing. The invitation updates in place as availability/voting closes. Real confirmed events each produce a separate event announcement. These live Discord paths require testing with valid credentials before production rollout.
 
 **The code does not yet implement a Discord Activity launch.** A fully embedded Activity needs the Discord Embedded App SDK, Activity URL mappings and authorization flow. Keep the normal mobile browser as a fallback when adding it.
 
@@ -110,7 +116,7 @@ The organizer starts rounds from the authenticated browser UI and may click **Po
 
 1. Merge the tested code with SCHEDULING_ENABLED **absent/0**. In this condition the original bot performs the same scheduled-event monitoring as before. No scheduling web server, Discord OAuth or new scheduled-event creation runs.
 2. On a staging bot/test guild, configure OAuth2, HTTPS and scheduling permissions. Verify a real end-to-end creation, RSVP and tracking before enabling production.
-3. Enable SCHEDULING_ENABLED=1 **only after** those tests and a working HTTPS URL; then publish a planning-round invitation intentionally.
+3. Enable SCHEDULING_ENABLED=1 **only after** the role IDs, HTTPS URL and permissions are configured. Start with SCHEDULING_TEST_MODE=1, keeping all posts and event simulations inside #bot-logs. Only after the live test has passed should you set SCHEDULING_TEST_MODE=0 for normal Mod → League/Public routing.
 4. To deactivate scheduling, set SCHEDULING_ENABLED=0 and restart the bot. Existing scheduled Discord events are not deleted by disabling WinterBot's planner. If the entire release must be reverted, use Git to revert the merge and let the existing nightly update guard validate CI before a new restart.
 
 **Auto-update note:** the bot has a separate guarded nightly main-branch updater. Merging this feature may still cause its normal code-update restart after the commit passes CI and the minimum-age check. The feature flag prevents the scheduling subsystem from starting until explicitly configured.

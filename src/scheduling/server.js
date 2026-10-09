@@ -11,6 +11,9 @@ const {
 } = require('./core');
 const { createAuth } = require('./auth');
 const { publishCandidate, postRoundPanel } = require('./publisher');
+const { destinationFor, validateBotChannels } = require('./channelPolicy');
+const { postSubmissionPanel, postEventAnnouncement } = require('./memberAnnouncements');
+const { attachSchedulingCommands } = require('./slashCommands');
 
 const PUBLIC = path.join(__dirname, 'public');
 
@@ -54,7 +57,7 @@ function publicRound(round, me) {
       copy.ballot.votes = { [me.id]: copy.ballot.votes[me.id] || [] };
       if (copy.phase === 'voting') copy.ballot.options.forEach(o => { delete o.votes; });
     }
-    copy.publications = copy.publications.filter(p => p.status === 'created')
+    copy.publications = copy.publications.filter(p => ['created','simulated'].includes(p.status))
       .map(p => ({ candidateId: p.candidateId, date: p.date, startAt: p.startAt, eventUrl: p.eventUrl, status: p.status }));
   }
   return copy;
@@ -104,6 +107,7 @@ function createScheduler(options) {
     throw new Error('Demo mode must bind only to localhost, never a public network interface.');
   }
   const config = { ...options, host, port };
+  if (!demo && !config.policy) throw new Error('Live scheduling requires the Management/League/Public channel and role policy.');
   const auth = createAuth(config);
   const store = new SchedulingStore(options.dataFile ||
     path.join(process.cwd(), demo ? 'scheduling-demo.json' : 'scheduling.json'));
@@ -111,14 +115,44 @@ function createScheduler(options) {
   let ticking = false;
   let timer = null;
   let httpServer = null;
+  let discordCommands = null;
+  async function reportIssue(source, error) {
+    console.error('WinterBot scheduling '+source+':', error.message);
+    try { await config.reportError?.(source,error); } catch (_) {}
+  }
+  function canRead(round, me) {
+    if (demo) return true;
+    if ((round.testMode === true) !== (config.testMode === true)) return false;
+    if (me.admin) return true;
+    const channelId = destinationFor(round, config.policy).channelId;
+    return me.verified === true && (me.allowedChannelIds || []).includes(channelId);
+  }
+  function canSubmit(round, me) {
+    if (demo) return true;
+    if ((round.testMode === true) !== (config.testMode === true)) return false;
+    return me.verified === true &&
+      (me.allowedChannelIds || []).includes(destinationFor(round, config.policy).channelId);
+  }
+  function requireRoundAccess(round, me, editing = false) {
+    if (!(editing ? canSubmit(round, me) : canRead(round, me)))
+      throw httpError(403, editing ? 'Both verification roles and access to the invitation channel are required.' :
+        'You do not have access to this scheduling round.');
+  }
+  async function updateInvitation(roundId) {
+    if (demo) return null;
+    const round = getRound(store.read(), roundId);
+    if (!round.announcementMessageId) return null;
+    return postSubmissionPanel(store, roundId, { ...config, baseUrl: auth.base });
+  }
 
   async function tick() {
     if (ticking) return;
     ticking = true;
     try {
       const due = store.read().rounds
-        .filter(r => (r.phase === 'collecting' && Date.parse(r.collectionClosesAt) <= Date.now()) ||
-          (r.phase === 'voting' && Date.parse(r.ballot.closesAt) <= Date.now()))
+        .filter(r => (demo || (r.testMode === true) === (config.testMode === true)) &&
+          ((r.phase === 'collecting' && Date.parse(r.collectionClosesAt) <= Date.now()) ||
+          (r.phase === 'voting' && Date.parse(r.ballot.closesAt) <= Date.now())))
         .map(r => r.id);
       if (due.length) {
         const changed = [];
@@ -129,8 +163,8 @@ function createScheduler(options) {
         });
         if (!demo) for (const id of changed) {
           if (!getRound(store.read(), id).announcementMessageId) continue;
-          try { await postRoundPanel(store, id, { ...config, baseUrl: auth.base }); }
-          catch (error) { console.error('Scheduling panel update failed:', error.message); }
+          try { await updateInvitation(id); }
+          catch (error) { await reportIssue('deadline.announcement', error); }
         }
       }
     } finally {
@@ -161,10 +195,11 @@ function createScheduler(options) {
       const me = await auth.identity(req);
       if (!me) throw httpError(401, 'Please sign in with Discord.');
       if (req.method === 'GET' && pathname === '/api/me') {
-        return send(res, 200, { ...me, demoPeople: demo ? auth.demoPeople : null });
+        return send(res, 200, { ...me, testMode: !demo && config.testMode === true,
+          demoPeople: demo ? auth.demoPeople : null });
       }
       if (req.method === 'GET' && pathname === '/api/rounds') {
-        const rounds = store.read().rounds.map(r => ({
+        const rounds = store.read().rounds.filter(r => canRead(r, me)).map(r => ({
           id: r.id, title: r.title, phase: r.phase, startDate: r.startDate, endDate: r.endDate,
           collectionClosesAt: r.collectionClosesAt, participantCount: r.participants.length,
         }));
@@ -172,7 +207,9 @@ function createScheduler(options) {
       }
       const match = pathname.match(/^\/api\/rounds\/([a-f0-9-]+)(?:\/([a-z-]+))?$/);
       if (req.method === 'GET' && match && !match[2]) {
-        return send(res, 200, { round: publicRound(getRound(store.read(), match[1]), me) });
+        const round = getRound(store.read(), match[1]);
+        requireRoundAccess(round, me);
+        return send(res, 200, { round: publicRound(round, me) });
       }
       if (req.method !== 'POST') throw httpError(404, 'Not found.');
       auth.requireOrigin(req);
@@ -188,22 +225,44 @@ function createScheduler(options) {
         if (!demo && (body.participants || []).some(p => !/^\d{15,22}$/.test(String(p.id)))) {
           throw httpError(400, 'Fixed participants must have valid Discord user IDs.');
         }
-        const round = createRound(body);
+        const testMode = !demo && config.testMode === true;
+        const destination = body.destination || 'league';
+        const channel = demo ? null : destinationFor({destination, testMode}, config.policy);
+        const round = createRound({ ...body, destination, testMode,
+          submissionChannelId: channel?.channelId || null });
         await store.transaction(state => { state.rounds.push(round); });
-        return send(res, 201, { round: publicRound(round, me) });
+        let invitation = null;
+        let warning = null;
+        if (!demo) {
+          try { invitation = await postSubmissionPanel(store, round.id,
+            { ...config, baseUrl: auth.base }); }
+          catch(error) { warning = 'Planning round saved, but the invitation could not be posted: '+error.message;
+            await reportIssue('invitation',error); }
+        }
+        return send(res, 201, { round: publicRound(getRound(store.read(), round.id), me),
+          invitation, warning });
       }
       if (!match || !match[2]) throw httpError(404, 'Not found.');
       const id = match[1], action = match[2];
+      if (!demo && (getRound(store.read(), id).testMode === true) !== (config.testMode === true)) {
+        throw httpError(403, 'This round belongs to another scheduling mode and cannot be modified here.');
+      }
       if (action === 'availability') {
         await store.transaction(state => {
           const round = getRound(state, id);
+          requireRoundAccess(round, me, true);
           advance(round);
           if (round.rosterMode === 'open') enroll(round, me.id, me.name);
           else if (!round.participants.some(p => p.id === me.id)) throw httpError(403, 'You are not on the participant list.');
           setDays(round, me.id, body.days);
         });
       } else if (action === 'vote') {
-        await store.transaction(state => { const r = getRound(state, id); advance(r); castVote(r, me.id, body.candidateIds); });
+        await store.transaction(state => {
+          const r = getRound(state, id);
+          requireRoundAccess(r, me, true);
+          advance(r);
+          castVote(r, me.id, body.candidateIds);
+        });
       } else if (action === 'close-collection') {
         if (!me.admin) throw httpError(403, 'Organizer permission required.');
         await store.transaction(state => { closeCollection(getRound(state, id), new Date(), true); });
@@ -220,23 +279,31 @@ function createScheduler(options) {
         await store.transaction(state => { closeVote(getRound(state, id), new Date(), true); });
       } else if (action === 'publish') {
         if (!me.admin) throw httpError(403, 'Organizer permission required.');
+        const round = getRound(store.read(), id);
         const publication = await publishCandidate(store, id, body.candidateId, body.startAt, {
-          ...config, demo, confirmedRetry: body.confirmedRetry === true,
+          ...config, demo, testMode: round.testMode === true || config.testMode === true,
+          confirmedRetry: body.confirmedRetry === true,
         });
-        if (!demo && getRound(store.read(), id).announcementMessageId) {
-          try { await postRoundPanel(store, id, { ...config, baseUrl: auth.base }); }
-          catch (error) { console.error('Event announcement update failed:', error.message); }
+        let warning = null;
+        if (!demo && ['created','simulated'].includes(publication.status)) {
+          try {
+            await postEventAnnouncement(store, id, publication.id, config);
+          } catch (error) {
+            warning = 'Event saved, but its announcement needs attention: ' + error.message;
+            await reportIssue('eventAnnouncement',error);
+          }
         }
-        return send(res, 200, { publication, round: publicRound(getRound(store.read(), id), me) });
+        return send(res, 200, { publication,
+          round: publicRound(getRound(store.read(), id), me), warning });
       } else if (action === 'announce') {
         if (!me.admin) throw httpError(403, 'Organizer permission required.');
         if (demo) return send(res, 200, { demo: true, notice: 'Demo mode does not send messages to Discord.' });
-        const result = await postRoundPanel(store, id, { ...config, baseUrl: auth.base });
+        const result = await postSubmissionPanel(store, id, { ...config, baseUrl: auth.base });
         return send(res, 200, result);
       } else throw httpError(404, 'Not found.');
       if (!demo && ['close-collection','start-vote','close-vote'].includes(action) && getRound(store.read(), id).announcementMessageId) {
-        try { await postRoundPanel(store, id, { ...config, baseUrl: auth.base }); }
-        catch (error) { console.error('Round announcement update failed:', error.message); }
+        try { await updateInvitation(id); }
+        catch (error) { await reportIssue('phase.announcement', error); }
       }
       return send(res, 200, { round: publicRound(getRound(store.read(), id), me) });
     } catch (error) {
@@ -248,10 +315,11 @@ function createScheduler(options) {
 
   async function start() {
     if (demo) await initializeDemo(store, auth);
+    else await validateBotChannels(config.client, config.policy, { testMode: config.testMode });
     await tick();
     httpServer = http.createServer((req, res) => {
       handler(req, res).catch(error => {
-        console.error('WinterBot scheduler unexpected failure:', error);
+        reportIssue('http.unexpected', error).catch(()=>{});
         if (!res.headersSent) send(res, 500, { error: 'Internal error.' });
         else res.destroy();
       });
@@ -260,11 +328,18 @@ function createScheduler(options) {
       httpServer.once('error', reject);
       httpServer.listen(port, host, resolve);
     });
-    timer = setInterval(() => tick().catch(error => console.error('Scheduler deadline check:', error)), 10000);
+    if (!demo) {
+      discordCommands = attachSchedulingCommands(config.client, store,
+        { policy: config.policy, baseUrl: auth.base, testMode: config.testMode === true });
+      await discordCommands.initialize();
+    }
+    timer = setInterval(() => tick().catch(error => reportIssue('deadline.check',error).catch(()=>{})), 10000);
     timer.unref?.();
     return { url: 'http://' + host + ':' + port, store };
   }
   async function stop() {
+    discordCommands?.stop();
+    discordCommands = null;
     if (timer) clearInterval(timer);
     if (httpServer) await new Promise(resolve => httpServer.close(resolve));
     await store.queue;
