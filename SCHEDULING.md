@@ -109,6 +109,9 @@ The organizer starts rounds from the authenticated browser UI and may click **Po
 
     npm test
     npm run test:ui
+    npm run test:viewports
+
+The optional browser viewport audit exercises 15 widths from 320 to 1920 CSS pixels across all four major scheduling phases (60 combinations). It also checks page-wide horizontal overflow, browser errors, and 125% page scaling on representative narrow/mobile and tablet widths. The audit passed without detected overflow. This does not replace real-device accessibility testing or testing within a Discord Activity viewport.
 
 The Node tests cover availability states, multi-ranges, caps, 90% ranking, candidate grouping, voting winners/losers/ties/no-vote, immutable vote times, deadlines, DST, persistence recovery, permissions and publication retries.
 
