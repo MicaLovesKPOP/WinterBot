@@ -14,6 +14,7 @@ logs/
 # Scheduling runtime data and local UI previews
 scheduling.json
 scheduling-demo.json
+scheduling-activity-test.json
 *.corrupt.*
 preview-screens/
 

@@ -175,10 +175,32 @@ async function bootstrap() {
       const { configureChannelPolicy } = require('./src/scheduling/channelPolicy');
       const { getSchedulingNgrokSettings, startSchedulingNgrokTunnel } = require('./src/scheduling/ngrokTunnel');
       const ngrokSettings = getSchedulingNgrokSettings(process.env);
+      let activityTest = null;
+      if (process.env.SCHEDULING_ACTIVITY_TEST_ENABLED === '1') {
+        try {
+          if (!ngrokSettings || process.env.SCHEDULING_TEST_MODE !== '1') {
+            throw new Error('Isolated Activity testing requires the existing TEST-only ngrok scheduler.');
+          }
+          const { createActivityTest } = require('./src/scheduling/activityTest');
+          activityTest = createActivityTest({
+            client,
+            clientId: process.env.DISCORD_CLIENT_ID,
+            clientSecret: process.env.DISCORD_CLIENT_SECRET,
+            sessionSecret: process.env.SCHEDULING_SESSION_SECRET,
+          });
+        } catch (error) {
+          // Activity is disposable: a corrupt test-only store or unsupported
+          // test configuration must never bring down the existing planner.
+          activityTest = null;
+          await logError('scheduling.activityTest.optionalStartup', error)
+            .catch(() => console.warn('Isolated Activity test disabled:', error.message));
+        }
+      }
       const policy = configureChannelPolicy({
         guildId: config.guildId, logChannelId: config.logChannelId, demo: false,
       });
       schedulingServer = createScheduler({
+        activityTest,
         policy,
         testMode: process.env.SCHEDULING_TEST_MODE === '1',
         reportError: (source, error) => logError('scheduling.' + source, error),
