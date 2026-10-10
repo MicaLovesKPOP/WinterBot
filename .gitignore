@@ -15,6 +15,7 @@ logs/
 scheduling.json
 scheduling-demo.json
 scheduling-activity-test.json
+scheduling-native-preview.json
 *.corrupt.*
 preview-screens/
 

@@ -11,7 +11,10 @@ const esbuild=require('esbuild');
 const ROOT=path.resolve(__dirname,'..');
 const source=path.join(ROOT,'src/scheduling/activity-client/main.js');
 const output=path.join(ROOT,'src/scheduling/activity-public/activity.js');
-const hash=crypto.createHash('sha256').update(fs.readFileSync(source)).digest('hex');
+// Git checks out CRLF on some Windows installations and LF in Linux CI.
+// Hash normalized source text so the generated marker is portable.
+const sourceText=fs.readFileSync(source,'utf8').replace(/\r\n/g,'\n');
+const hash=crypto.createHash('sha256').update(sourceText,'utf8').digest('hex');
 
 esbuild.build({
   entryPoints:[source],
