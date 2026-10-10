@@ -96,17 +96,20 @@ test('saved usual week applies by weekday without updating the template',()=>{
 test('preview UI builds native components and a modal with five dropdown fields',()=>{
   const {round,member}=demo();
   const overview=UI.overview(round,member,null);
-  assert.equal(overview.embeds.length,1);
-  assert.equal(overview.components.length,3);
+  assert.equal(overview.embeds,undefined);
+  assert.equal(overview.components.length,1);
+  assert.equal(overview.flags,64|32768);
   for(const item of overview.components) assert.doesNotThrow(()=>item.toJSON());
   const day=UI.dayView(round,member,round.dates[0]);
-  assert.equal(day.components.length,3);
+  assert.equal(day.components.length,1);
+  assert.equal(UI.quickModal(round.id,[round.dates[0]],member).toJSON().components.length,5);
+  assert.equal(UI.copyModal(round.id,round,member,round.dates[0]).toJSON().components.length,1);
   const win=UI.windowModal(round.id,round.dates[0],'tentative','12');
   assert.equal(win.toJSON().components.length,5);
   assert.match(JSON.stringify(win.toJSON()),/end of day/);
 });
 function fakeInteraction(id, kind='button', values=[], roles=[MANAGEMENT,...VERIFIED]){
-  const result={replied:null,updated:null,modal:null,followup:null};
+  const result={replied:null,updated:null,modal:null,followup:null,deferred:false};
   const i={
     guildId:GUILD,channelId:LOG,user:{id:USER_ID},
     member:{id:USER_ID,roles:{cache:{has:id=>roles.includes(id)}}},
@@ -115,7 +118,9 @@ function fakeInteraction(id, kind='button', values=[], roles=[MANAGEMENT,...VERI
     isModalSubmit:()=>kind==='modal',
     isFromMessage:()=>kind==='modal',
     async reply(v){result.replied=v;},async update(v){result.updated=v;},
+    async deferUpdate(){result.deferred=true;},
     async followUp(v){result.followup=v;},async showModal(v){result.modal=v;},
+
   };
   return {i,result};
 }
@@ -127,7 +132,7 @@ test('test-only Discord prototype supports a full draft, review, submit, and tem
   const sid=Object.keys(preview.store.read().rounds)[0];
   const open=fakeInteraction('wbux:open:'+sid);
   await preview.handle(open.i);
-  assert.equal(open.result.replied.flags,64);
+  assert.equal(open.result.replied.flags,64|32768);
   const bad=fakeInteraction('wbux:open:'+sid,'button',[],[]);
   await preview.handle(bad.i);
   assert.match(bad.result.replied.content,/eligible/);
@@ -145,7 +150,7 @@ test('test-only Discord prototype supports a full draft, review, submit, and tem
   assert.equal(m.submitted,null);
   const review=fakeInteraction('wbux:review:'+sid);
   await preview.handle(review.i);
-  assert.match(review.result.updated.embeds[0].toJSON().title,/Review/);
+  assert.match(JSON.stringify(review.result.updated.components.map(c=>c.toJSON())),/Review & Submit/);
   const submit=fakeInteraction('wbux:submit:'+sid);
   await preview.handle(submit.i);
   m=preview.store.read().rounds[sid].members[USER_ID];
@@ -172,4 +177,89 @@ test('preview state survives a new store instance',async t=>{
 });
 test('preview is disabled outside TEST mode',()=>{
   assert.throws(()=>createNativePrototype({policy,testMode:false,dataFile:'do-not-create.json'}),/TEST mode/);
+});
+
+test('weekly editor remains the same native Components V2 surface for common edits',async t=>{
+  const preview=createNativePrototype({policy,testMode:true,dataFile:temporaryFile(t)});
+  await preview.startPreview(fakeInteraction('').i);
+  const sid=Object.keys(preview.store.read().rounds)[0];
+  const dates=preview.store.read().rounds[sid].dates;
+
+  // Opening a date opens a modal immediately, without replacing the week.
+  const one=fakeInteraction('wbux:jump:'+sid,'select',[dates[0]]);
+  await preview.handle(one.i);
+  assert.ok(one.result.modal);
+  assert.equal(one.result.updated,null);
+  assert.equal(one.result.modal.toJSON().components.length,5);
+  const fields={quick_status:['tentative'],start_h:['19'],start_m:['30'],
+    end_h:['23'],end_m:['00']};
+  const saved=fakeInteraction('wbux:quickwin:'+sid+':day:'+dates[0],'modal');
+  saved.i.fields={getStringSelectValues:field=>fields[field]||[]};
+  await preview.handle(saved.i);
+  assert.equal(saved.result.updated.components.length,1,'a single week container is updated');
+  assert.equal(preview.store.read().rounds[sid].members[USER_ID].draft[dates[0]].windows[0].kind,'tentative');
+
+  // Selecting multiple days acknowledges quickly without rewriting the interface.
+  const datesSelect=fakeInteraction('wbux:selectbulk:'+sid+':all','select',dates.slice(1,4));
+  await preview.handle(datesSelect.i);
+  assert.equal(datesSelect.result.deferred,true);
+  assert.equal(datesSelect.result.updated,null);
+  const bulkModal=fakeInteraction('wbux:quickbulk:'+sid);
+  await preview.handle(bulkModal.i);
+  assert.equal(bulkModal.result.modal.toJSON().components.length,5);
+  const bulkFields={quick_status:['confirmed'],start_h:['18'],start_m:['00'],
+    end_h:['22'],end_m:['00']};
+  const bulkSubmit=fakeInteraction('wbux:quickwin:'+sid+':multi:multi','modal');
+  bulkSubmit.i.fields={getStringSelectValues:field=>bulkFields[field]||[]};
+  await preview.handle(bulkSubmit.i);
+  assert.equal(bulkSubmit.result.updated.components.length,1);
+  const m=preview.store.read().rounds[sid].members[USER_ID];
+  assert.equal(m.selection.length,0);
+  for(const d of dates.slice(1,4)) assert.equal(m.draft[d].windows[0].start,'18:00');
+  assert.equal(m.submitted,null);
+});
+test('one-click multi-day presets and contextual copy keep data in draft',async t=>{
+  const preview=createNativePrototype({policy,testMode:true,dataFile:temporaryFile(t)});
+  await preview.startPreview(fakeInteraction('').i);
+  const sid=Object.keys(preview.store.read().rounds)[0];
+  const dates=preview.store.read().rounds[sid].dates;
+  await preview.handle(fakeInteraction('wbux:selectbulk:'+sid+':all','select',dates.slice(0,2)).i);
+  await preview.handle(fakeInteraction('wbux:bulkfast:'+sid+':all').i);
+  const r=preview.store.read().rounds[sid];
+  assert.equal(r.members[USER_ID].draft[dates[0]].windows[0].end,'24:00');
+  assert.equal(r.members[USER_ID].draft[dates[1]].windows[0].end,'24:00');
+
+  const tools=fakeInteraction('wbux:tools:'+sid);
+  await preview.handle(tools.i);
+  assert.match(JSON.stringify(tools.result.updated.components.map(c=>c.toJSON())),/More Day Tools/);
+  const details=fakeInteraction('wbux:detail:'+sid,'select',[dates[0]]);
+  await preview.handle(details.i);
+  assert.match(JSON.stringify(details.result.updated.components.map(c=>c.toJSON())),/Current answer/);
+
+  const copy=fakeInteraction('wbux:copy:'+sid+':'+dates[0]);
+  await preview.handle(copy.i);
+  assert.ok(copy.result.modal,'copy opens a destination picker modal from source day');
+  const copied=fakeInteraction('wbux:quickcopy:'+sid+':'+dates[0],'modal');
+  copied.i.fields={getStringSelectValues:()=>dates.slice(2,5)};
+  await preview.handle(copied.i);
+  assert.match(JSON.stringify(copied.result.updated.components.map(c=>c.toJSON())),/Review Changes/);
+  await preview.handle(fakeInteraction('wbux:apply:'+sid).i);
+  const m=preview.store.read().rounds[sid].members[USER_ID];
+  for(const d of dates.slice(2,5)) assert.equal(m.draft[d].windows[0].end,'24:00');
+  assert.equal(m.submitted,null,'copy never bypasses final review');
+});
+test('weekly overview groups controls below their instructions with stable ordering',()=>{
+  const {round,member}=demo();
+  const data=UI.overview(round,member,null).components[0].toJSON();
+  const parts=data.components;
+  const texts=parts.filter(c=>c.type===10).map(c=>c.content);
+  assert.ok(texts.some(s=>s.includes('Edit several days at once')));
+  assert.ok(texts.some(s=>s.includes('Or edit one day')));
+  const firstSelectIndex=parts.findIndex(c=>c.type===1&&
+    c.components?.some(v=>v.custom_id?.startsWith('wbux:selectbulk:')));
+  const secondSelectIndex=parts.findIndex(c=>c.type===1&&
+    c.components?.some(v=>v.custom_id?.startsWith('wbux:jump:')));
+  assert.ok(firstSelectIndex>0&&secondSelectIndex>firstSelectIndex);
+  assert.equal(data.type,17,'single stable V2 container');
+  assert.equal(parts.filter(c=>c.type===1).length,5,'five Discord action rows maximum');
 });

@@ -80,7 +80,7 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
       const uid=String(interaction.user.id);
       assert(/^\d{15,22}$/.test(uid), 'Discord user ID missing.');
       if(action==='open') {
-        const s=await change(sid,uid,()=>{});
+        const s=snapshot(sid,uid);
         await interaction.reply(UI.overview(s.round,s.member,s.template));
         return true;
       }
@@ -89,11 +89,92 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
         await respond(interaction,UI.overview(s.round,s.member,s.template));
         return true;
       }
-      if(action==='jump' || action==='day') {
+      if(action==='jump' || action==='quickdate') {
         const date=action==='jump'?interaction.values?.[0]:a;
         const s=snapshot(sid,uid);
         assert(s.round.dates.includes(date),'Choose one of the candidate dates.');
+        await interaction.showModal(UI.quickModal(sid,[date],s.member,'day'));
+        return true;
+      }
+      if(action==='day' || action==='detail') {
+        const date=action==='detail'?interaction.values?.[0]:a;
+        const s=snapshot(sid,uid);
+        assert(s.round.dates.includes(date),'Choose one of the candidate dates.');
         await respond(interaction,UI.dayView(s.round,s.member,date));
+        return true;
+      }
+      if(action==='tools') {
+        const s=snapshot(sid,uid);
+        await respond(interaction,UI.dayTools(s.round,s.member));
+        return true;
+      }
+      if(action==='selectbulk') {
+        const dates=interaction.values||[];
+        await change(sid,uid,(r,m)=>{
+          assert(dates.every(d=>r.dates.includes(d)),'Choose valid dates.');
+          m.selection=[...new Set(dates)];
+        });
+        // Acknowledge without redrawing the weekly editor. Discord already
+        // displays the selected options in its native multi-select control.
+        await interaction.deferUpdate();
+        return true;
+      }
+      if(action==='quickbulk') {
+        const s=snapshot(sid,uid);
+        const dates=s.member.selection.filter(d=>s.round.dates.includes(d));
+        assert(dates.length,'Select days in the overview first.');
+        await interaction.showModal(UI.quickModal(sid,dates,s.member,'multi'));
+        return true;
+      }
+      if(action==='bulkfast') {
+        assert(['all','off'].includes(a),'Invalid quick action.');
+        const s=await change(sid,uid,(r,m)=>{
+          const dates=m.selection.filter(d=>r.dates.includes(d));
+          assert(dates.length,'Select dates first.');
+          const previous=dates.filter(d=>m.draft[d]).length;
+          applyDays(m,r,dates,a==='all'?allDay():{status:'unavailable',windows:[]});
+          return 'Updated '+dates.length+' day(s)'+(previous?' · replaced '+previous+' existing answer(s)':'')+'. Review before submitting.';
+        });
+        await respond(interaction,UI.overview(s.round,s.member,s.template,s.notice));
+        return true;
+      }
+      if(action==='quickwin') {
+        const field=name=>{
+          const values=interaction.fields.getStringSelectValues(name);
+          assert(Array.isArray(values)&&values.length===1,'Choose '+name+'.');
+          return values[0];
+        };
+        const status=field('quick_status');
+        let day;
+        if(status==='off') day={status:'unavailable',windows:[]};
+        else if(status==='all'||status==='maybe') day=allDay(status==='maybe'?'tentative':'confirmed');
+        else {
+          assert(['confirmed','tentative'].includes(status),'Invalid availability type.');
+          const start=String(Number(field('start_h'))).padStart(2,'0')+':'+field('start_m');
+          const endHour=Number(field('end_h'));
+          const end=endHour===24 ? '24:00' :
+            String(endHour).padStart(2,'0')+':'+field('end_m');
+          day=normalizedDay({status:'available',windows:[{start,end,kind:status,maxMinutes:null}]});
+        }
+        const isMulti=a==='multi';
+        const s=await change(sid,uid,(r,m)=>{
+          const dates=isMulti?m.selection.filter(d=>r.dates.includes(d)):[b];
+          assert(dates.length && dates.every(d=>r.dates.includes(d)),'Selected dates are no longer available.');
+          const replaced=dates.filter(d=>m.draft[d]).length;
+          applyDays(m,r,dates,day);
+          return 'Draft updated for '+dates.length+' day(s)'+(replaced?' ('+replaced+' previous answer(s) replaced)':'')+'.';
+        });
+        await respond(interaction,UI.overview(s.round,s.member,s.template,s.notice));
+        return true;
+      }
+      if(action==='quickcopy') {
+        const targets=interaction.fields.getStringSelectValues('copy_targets');
+        const s=await change(sid,uid,(r,m)=>{
+          assert(r.dates.includes(a)&&m.draft[a],'The source day is unanswered.');
+          assert(targets.length && targets.every(d=>r.dates.includes(d)&&d!==a),'Choose valid destination days.');
+          m.pending={type:'copy',source:a,dates:[...new Set(targets)]};
+        });
+        await respond(interaction,UI.pendingView(s.round,s.member,s.template));
         return true;
       }
       if(action==='review') {
@@ -150,7 +231,7 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
         };
         const start=String(field('start_h')).padStart(2,'0')+':'+field('start_m');
         const endHour=Number(field('end_h'));
-        const end=endHour===24 ? (field('end_m')==='00'?'24:00':'invalid') :
+        const end=endHour===24 ? '24:00' :
           String(endHour).padStart(2,'0')+':'+field('end_m');
         const cap=field('cap'), win={start,end,kind,maxMinutes:cap==='none'?null:Number(cap)};
         // Validate the window even before the user confirms a bulk overwrite.
@@ -187,14 +268,15 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
         await respond(interaction,UI.dayView(s.round,s.member,a,s.notice));
         return true;
       }
-      if(action==='bulk' || action==='copy') {
-        const s=await change(sid,uid,(r,m)=>{
-          if(action==='copy') assert(r.dates.includes(a) && m.draft[a],
-            'Choose an answered source day to copy.');
-          m.selection=[];
-          m.pending=null;
-        });
-        await respond(interaction,UI.multiView(s.round,s.member,action==='copy'?a:null));
+      if(action==='copy') {
+        const s=snapshot(sid,uid);
+        assert(s.round.dates.includes(a) && s.member.draft[a],'Choose an answered source day to copy.');
+        await interaction.showModal(UI.copyModal(sid,s.round,s.member,a));
+        return true;
+      }
+      if(action==='bulk') {
+        const s=await change(sid,uid,(_,m)=>{m.selection=[];m.pending=null;});
+        await respond(interaction,UI.multiView(s.round,s.member));
         return true;
       }
       if(action==='dates' || action==='dest') {
