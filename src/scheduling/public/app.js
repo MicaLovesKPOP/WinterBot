@@ -163,13 +163,49 @@ function dayStrip() {
         '</span>' + escapeHtml(s === 'unanswered' ? 'Not answered' : s) + '</span></button>';
     }).join('') + '</div>';
 }
-function timeOptions(selected, isEnd) {
+function minuteValue(time) {
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+function clockValue(minutes) {
+  return String(Math.floor(minutes / 60)).padStart(2, '0') + ':' +
+    String(minutes % 60).padStart(2, '0');
+}
+function allowedHours(date) {
+  return state.round?.dayLimits?.[date] || { start: '00:00', end: '24:00' };
+}
+// Older saved replies might predate organizer-limit enforcement. Present the
+// usable intersection rather than offering out-of-range choices on edit.
+function usableWindows(windows, date) {
+  const allowed = allowedHours(date), start = minuteValue(allowed.start);
+  const end = minuteValue(allowed.end);
+  return windows.map(w => {
+    const lo = Math.max(start, minuteValue(w.start));
+    const hi = Math.min(end, minuteValue(w.end));
+    if (hi <= lo) return null;
+    return {
+      start: clockValue(lo), end: clockValue(hi),
+      maxMinutes: w.maxMinutes == null ? null : Math.min(w.maxMinutes, hi - lo),
+    };
+  }).filter(Boolean);
+}
+function preferredWindow(date, preset = 'evening') {
+  const allowed = allowedHours(date);
+  const from = minuteValue(allowed.start), until = minuteValue(allowed.end);
+  if (preset === 'all-day') {
+    return { start: allowed.start, end: allowed.end, maxMinutes: null };
+  }
+  const lo = Math.max(from, minuteValue('18:00'));
+  const hi = Math.min(until, minuteValue('23:00'));
+  return hi - lo >= 15 ? { start: clockValue(lo), end: clockValue(hi), maxMinutes: null } : null;
+}
+function timeOptions(selected, isEnd, bounds = { start: '00:00', end: '24:00' }, pairedTime = null) {
   let result = '';
-  const from = isEnd ? 1 : 0, through = isEnd ? 96 : 95;
-  for (let i = from; i <= through; i++) {
-    const hour = String(Math.floor(i / 4)).padStart(2, '0');
-    const min = String((i % 4) * 15).padStart(2, '0');
-    const time = hour + ':' + min;
+  const low = minuteValue(bounds.start), high = minuteValue(bounds.end);
+  const from = isEnd ? Math.max(low + 15, pairedTime ? minuteValue(pairedTime) + 15 : low + 15) : low;
+  const through = isEnd ? high : Math.min(high - 15, pairedTime ? minuteValue(pairedTime) - 15 : high - 15);
+  for (let m = from; m <= through; m += 15) {
+    const time = clockValue(m);
     result += '<option value="' + time + '"' + (selected === time ? ' selected' : '') + '>' +
       (time === '24:00' ? '24:00 (midnight)' : time) + '</option>';
   }
@@ -189,7 +225,12 @@ function capOptions(window) {
 function renderAvailabilityEditor() {
   const r = state.round;
   const day = state.day;
-  const entry = entryOf(day);
+  const saved = entryOf(day);
+  const hours = allowedHours(day);
+  const clipped = saved.status === 'available' ? usableWindows(saved.windows, day) : [];
+  const entry = saved.status === 'available' ? { ...saved, windows: clipped } : saved;
+  const legacyOutsideHours = saved.status === 'available' &&
+    JSON.stringify(saved.windows) !== JSON.stringify(clipped);
   const answered = r.dates.filter(d => statusOf(d) !== 'unanswered').length;
   const pct = Math.round(answered / r.dates.length * 100);
   const allowed = r.participants.some(p => p.id === state.me.id) || r.rosterMode === 'open';
@@ -205,23 +246,37 @@ function renderAvailabilityEditor() {
   html += dayStrip();
   html += '<div class="card flow"><div class="panel-title"><h2>' + escapeHtml(longDate(day)) +
     '</h2><span class="pill">' + escapeHtml(r.timezone) + '</span></div>' +
+    (r.dayLimits?.[day]
+      ? '<div class="info-line"><strong>Event hours for this date: ' +
+        escapeHtml(hours.start) + '–' + escapeHtml(hours.end) +
+        '.</strong> Select only the hours you could attend within this range.</div>'
+      : '') +
     '<div class="segmented" role="group" aria-label="Availability for selected day">' +
     [['available','Available'],['unavailable','Unavailable'],['unanswered','Not decided']].map(s =>
       '<button type="button" class="option ' + (entry.status === s[0] ? 'active' : '') +
       '" data-action="day-status" data-status="' + s[0] + '">' + s[1] + '</button>').join('') + '</div>';
   if (entry.status === 'available') {
-    html += '<p class="muted small">Choose when you could attend. Optional limits mean you can attend only part of that window.</p>' +
-      '<div class="row">' + btn('All day · 00–24', 'all-day', 'small') +
-      btn('Evening · 18–23', 'evening', 'small') + '</div>';
+    const evening = preferredWindow(day, 'evening');
+    html += (legacyOutsideHours
+      ? '<div class="note">Some previously saved hours were outside this date\'s event limits. ' +
+        'The usable part is shown below. Choose a preset or edit a window to save the corrected hours.</div>'
+      : '') +
+      '<p class="muted small">Choose when you could attend within the event hours. ' +
+      'Optional maximum stay limits how long you can join.</p>' +
+      '<div class="row">' +
+      btn(r.dayLimits?.[day] ? 'All allowed hours · ' + hours.start + '–' + hours.end :
+        'All day · 00–24', 'all-day', 'small') +
+      (evening ? btn('Evening · ' + evening.start + '–' + evening.end, 'evening', 'small') : '') +
+      '</div>';
     entry.windows.forEach((w, i) => {
       html += '<div class="window"><div class="window-head"><strong>Availability window ' + (i + 1) +
         '</strong>' + btn('Remove', 'remove-window', 'ghost small', 'data-index="' + i + '"') + '</div>' +
         '<div class="window-controls"><div class="field"><label for="start-' + i + '">From</label>' +
         '<select class="select" id="start-' + i + '" data-window="' + i + '" data-field="start">' +
-        timeOptions(w.start, false) + '</select></div>' +
+        timeOptions(w.start, false, hours, w.end) + '</select></div>' +
         '<div class="field"><label for="end-' + i + '">Until</label>' +
         '<select class="select" id="end-' + i + '" data-window="' + i + '" data-field="end">' +
-        timeOptions(w.end, true) + '</select></div>' +
+        timeOptions(w.end, true, hours, w.start) + '</select></div>' +
         '<div class="field"><label for="cap-' + i + '">Maximum stay</label><select class="select" id="cap-' + i +
         '" data-window="' + i + '" data-field="maxMinutes">' + capOptions(w) + '</select></div></div></div>';
     });
@@ -549,24 +604,41 @@ function render() {
   }
 }
 function currentWindows() {
-  return structuredClone(entryOf(state.day).windows);
+  return usableWindows(entryOf(state.day).windows, state.day);
 }
 async function saveDays(days, message = 'Availability saved') {
   await post('availability', { days });
   announce(message);
 }
 async function statusChange(status) {
-  const previous = entryOf(state.day);
+  const previous = currentWindows();
   const windows = status === 'available'
-    ? (previous.windows.length ? previous.windows : [{ start: '18:00', end: '23:00', maxMinutes: null }]) : [];
+    ? (previous.length ? previous : [preferredWindow(state.day) || preferredWindow(state.day, 'all-day')]) : [];
   await saveDays([{ date: state.day, status, windows }]);
 }
-function freeWindow(windows) {
-  const presets = [['09:00','12:00'],['13:00','16:00'],['18:00','21:00'],['21:00','23:00']];
-  const min = s => Number(s.split(':')[0]) * 60 + Number(s.split(':')[1]);
-  for (const p of presets) {
-    if (windows.every(w => min(p[1]) <= min(w.start) || min(p[0]) >= min(w.end))) {
-      return { start: p[0], end: p[1], maxMinutes: null };
+function freeWindow(windows, date) {
+  const hours = allowedHours(date), lower = minuteValue(hours.start), upper = minuteValue(hours.end);
+  const occupied = windows.map(w => [minuteValue(w.start), minuteValue(w.end)])
+    .sort((a, b) => a[0] - b[0]);
+  const gaps = [];
+  let cursor = lower;
+  for (const [start, end] of occupied) {
+    if (start > cursor) gaps.push([cursor, start]);
+    cursor = Math.max(cursor, end);
+  }
+  if (cursor < upper) gaps.push([cursor, upper]);
+
+  // Try convenient ranges first, then whatever free period remains.
+  const presets = [['18:00','21:00'],['21:00','23:00'],['09:00','12:00'],
+    ['13:00','16:00'],[hours.start, hours.end]];
+  for (const [begin, finish] of presets) {
+    for (const [gapStart, gapEnd] of gaps) {
+      const start = Math.max(gapStart, minuteValue(begin));
+      const end = Math.min(gapEnd, minuteValue(finish));
+      if (end - start >= 15) {
+        return { start: clockValue(start), end: clockValue(Math.min(end, start + 180)),
+          maxMinutes: null };
+      }
     }
   }
   return null;
@@ -592,14 +664,13 @@ async function handleAction(node) {
   if (action === 'choose-day') { state.day = node.dataset.date; return render(); }
   if (action === 'day-status') return statusChange(node.dataset.status);
   if (action === 'all-day' || action === 'evening') {
-    const window = action === 'all-day'
-      ? { start: '00:00', end: '24:00', maxMinutes: null }
-      : { start: '18:00', end: '23:00', maxMinutes: null };
+    const window = preferredWindow(state.day, action);
+    if (!window) return announce('This preset has no overlap with the allowed event hours.', true);
     return saveDays([{date: state.day, status: 'available', windows: [window]}], 'Availability preset saved');
   }
   if (action === 'add-window') {
     const windows = currentWindows();
-    const w = freeWindow(windows);
+    const w = freeWindow(windows, state.day);
     if (!w) return announce('No free preset window. Adjust an existing window first.', true);
     windows.push(w);
     return saveDays([{ date: state.day, status: 'available', windows }], 'Window added');
@@ -615,8 +686,19 @@ async function handleAction(node) {
     if (entry.status === 'unanswered') return announce('Choose your availability for this day first.', true);
     const dates = r.dates.filter(d => d !== state.day && statusOf(d) === 'unanswered');
     if (!dates.length) return announce('No unanswered dates remain.');
-    return saveDays(dates.map(date => ({ date, status: entry.status, windows: entry.windows })),
-      'Copied to ' + dates.length + ' unanswered day(s)');
+    // First constrain the source to the organizer's own hours, then intersect
+    // that availability with each target day's potentially different hours.
+    const sourceWindows = entry.status === 'available' ?
+      usableWindows(entry.windows, state.day) : [];
+    const days = dates.map(date => {
+      if (entry.status !== 'available') return { date, status: entry.status, windows: [] };
+      const windows = usableWindows(sourceWindows, date);
+      return windows.length ? { date, status: 'available', windows } : null;
+    }).filter(Boolean);
+    const skipped = dates.length - days.length;
+    if (!days.length) return announce('No days copied: your hours do not overlap the other dates\' allowed event hours.', true);
+    return saveDays(days, 'Copied to ' + days.length + ' unanswered day(s)' +
+      (skipped ? '; skipped ' + skipped + ' with no overlapping event hours.' : '.'));
   }
   if (action === 'mark-rest') {
     const dates = r.dates.filter(d => statusOf(d) === 'unanswered');

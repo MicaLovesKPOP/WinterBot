@@ -8,7 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { DateTime } = require('luxon');
 const { PermissionFlagsBits, Collection } = require('discord.js');
-const { createRound, setDay, calculateCandidates, closeCollection } = require('../src/scheduling/core');
+const { createRound, setDay, setDays, calculateCandidates, closeCollection } = require('../src/scheduling/core');
 const {
   CHANNELS, DEFAULT_ROLES, configureChannelPolicy, destinationFor, mayUseSetupInteraction,
   isOrganizerMember, isVerifiedMember,
@@ -74,7 +74,7 @@ test('organizer selects dates, per-date hour restrictions and event duration ran
   assert.equal(r.dayLimits[date(9)].start,'18:00');
   assert.equal(r.maxDurationMinutes,180);
   for(const p of r.participants) {
-    setDay(r,p.id,date(9),{status:'available',windows:[{start:'00:00',end:'24:00'}]});
+    setDay(r,p.id,date(9),{status:'available',windows:[{start:'18:00',end:'22:00'}]});
     setDay(r,p.id,date(11),{status:'available',windows:[{start:'18:00',end:'23:00'}]});
   }
   const groups=calculateCandidates(r).candidates;
@@ -433,4 +433,65 @@ test('HTTPS tunnel readiness gate runs before publishing the Discord slash comma
     await scheduler.stop();
     fs.rmSync(dir,{recursive:true,force:true});
   }
+});
+
+
+test('organizer event-hours limits are enforced on every availability submission',()=>{
+  const first = date(9), second = date(10);
+  const r = seedRound({
+    startDate:first, endDate:second,
+    dayLimits: { [first]: { start:'17:30', end:'24:00' } },
+  });
+  assert.throws(()=>setDay(r,'u1',first,{
+    status:'available',windows:[{start:'17:15',end:'21:00'}],
+  }),/17:30.*24:00/);
+  assert.throws(()=>setDay(r,'u1',first,{
+    status:'available',windows:[{start:'18:00',end:'24:00'},{start:'00:00',end:'01:00'}],
+  }),/17:30.*24:00/);
+  assert.throws(()=>setDay(r,'u1',first,{
+    status:'available',windows:[{start:'19:00',end:'23:45'},{start:'23:45',end:'24:00'},{start:'00:00',end:'00:15'}],
+  }),/17:30.*24:00/);
+
+  assert.deepEqual(setDay(r,'u1',first,{
+    status:'available',windows:[{start:'17:30',end:'24:00',maxMinutes:120}],
+  }),{status:'available',windows:[{start:'17:30',end:'24:00',maxMinutes:120}]});
+  assert.deepEqual(setDay(r,'u1',second,{
+    status:'available',windows:[{start:'00:00',end:'24:00'}],
+  }).windows[0].start,'00:00','unrestricted days remain unrestricted');
+
+  // Bulk requests remain atomic. A bad date must not save a preceding good one.
+  const before=structuredClone(r.availability);
+  assert.throws(()=>setDays(r,'u1',[
+    {date:second,status:'unavailable'},
+    {date:first,status:'available',windows:[{start:'08:00',end:'09:00'}]},
+  ]),/17:30.*24:00/);
+  assert.deepEqual(r.availability,before);
+});
+
+test('real HTTP scheduling API rejects hours outside a day limit',async()=>{
+  const t=await appFixture(true,12199);
+  try{
+    const day=date(9), after=date(10);
+    const created=await t.req('POST','/api/rounds','owner',{
+      title:'Restricted test event',timezone:'Europe/Amsterdam',
+      startDate:day,endDate:after,
+      dayLimits:{[day]:{start:'17:30',end:'24:00'}},
+      durationMinutes:120,
+    });
+    assert.equal(created.status,201,JSON.stringify(created.body));
+    const roundId=created.body.round.id;
+    const outside=await t.req('POST','/api/rounds/'+roundId+'/availability','u1',{
+      days:[{date:day,status:'available',windows:[{start:'16:00',end:'23:00'}]}],
+    });
+    assert.equal(outside.status,400);
+    assert.match(outside.body.error,/17:30.*24:00/);
+    const accepted=await t.req('POST','/api/rounds/'+roundId+'/availability','u1',{
+      days:[{date:day,status:'available',windows:[{start:'17:30',end:'24:00'}]}],
+    });
+    assert.equal(accepted.status,200,JSON.stringify(accepted.body));
+    const saved=accepted.body.round.availability.u1[day];
+    assert.deepEqual(saved.windows,[{start:'17:30',end:'24:00',maxMinutes:null}]);
+    assert.equal(t.client.eventCreateCalls,0);
+    assert.ok(!t.client.sent[CHANNELS.league] && !t.client.sent[CHANNELS.public]);
+  } finally {await t.stop();}
 });

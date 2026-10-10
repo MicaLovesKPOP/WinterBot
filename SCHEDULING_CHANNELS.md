@@ -51,6 +51,7 @@ Guaranteed behavior:
 - Verified participants need BOTH checkmark roles and View Channel permission for the chosen League/Public destination. Backend authorization checks roles and channel access independently of links.
 - The member channel receives only the updated invitation and confirmed-event announcements, not organizer updates or logs.
 - Management can select individual dates, optionally limit valid event hours separately for each date, and specify an event duration range with configured increments.
+- Participant availability entry uses the **same per-date event-hours limits**. For a date restricted to 17:30–24:00, the From/Until dropdowns, All allowed hours/Evening presets, additional windows, and copy-to-other-dates feature never propose times outside the permitted range. The server independently rejects forged or outdated availability submissions that exceed the limit. Previously saved responses from older versions are shown as their in-range intersection, with a notice to save a corrected answer.
 - The optimizer favors the largest full-duration attendance, with longer durations winning ties. Members can still limit their own stay within each availability window.
 - Optional voting excludes only losing options actually included in the ballot. Unvoted candidates survive.
 - One real WinterBot scheduled event per calendar day across all scheduling rounds.
