@@ -96,6 +96,14 @@ membership and View Channel access on the test server.
 - **No /activitytest command:** Ensure WinterBot joined the test guild,
   the PR has deployed, and SCHEDULING_ACTIVITY_TEST_ENABLED=1 is set.
   Check WinterBot logs for Activity test startup issues.
+- **Button shows "This interaction failed":** after restarting with this
+  version, run **/activitytest status** in the test channel. It queries the
+  application's EMBEDDED flag directly from Discord and tells you whether
+  Activities are enabled. If enabled, inspect DiscordBotHosting console for
+  "WinterBot test Activity launch failed" and its Discord error code; then
+  confirm Activities → URL Mappings in the Developer Portal. WinterBot uses
+  discord.js's native launchActivity() method (an unauthenticated type-12
+  interaction response), and shows an ephemeral error when Discord rejects it.
 - **Cannot launch:** Enable Activities and the URL Mapping, and ensure the
   guild has fewer than 25 members and the account is an authorized tester.
 - **Blank page or ngrok warning:** The free-tier ngrok anti-abuse interstitial

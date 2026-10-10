@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { createScheduler } = require('../src/scheduling/server');
+const { ButtonInteraction, MessageFlags } = require('discord.js');
 const { enroll, setDays } = require('../src/scheduling/core');
 const { createActivityTest, GUILD_ID, CHANNEL_ID, LAUNCH_ID } =
   require('../src/scheduling/activityTest');
@@ -83,6 +84,10 @@ function fakeInteraction(type,subcommand='invite',guildId=GUILD_ID,channelId=CHA
     message:{author:{id:BOT_ID}},id:'112211221122112211',
     token:'fake-interaction-token',
     options:{getSubcommand:()=>subcommand},
+    // Invoke discord.js's real method so the test detects missing auth:false.
+    async launchActivity(opts) {
+      return ButtonInteraction.prototype.launchActivity.call(this,opts);
+    },
     async reply(data){calls.reply=data;x.replied=true;},
     async deferReply(data){calls.defer=data;x.deferred=true;},
     async editReply(data){calls.edit=data;},
@@ -213,15 +218,39 @@ test('test invitation button launches Activity callback 12 only in the test chan
     assert.deepEqual(f.sent[0].allowedMentions,{parse:[]});
 
     const button=fakeInteraction('button');
+    button.x.client=f.client;
     await f.activity.onInteraction(button.x);
     assert.equal(f.restCalls.length,1);
     assert.equal(f.restCalls[0].payload.body.type,12);
+    assert.equal(f.restCalls[0].payload.auth,false,
+      'Discord interaction callbacks must not attach the bot Authorization header');
+    assert.equal(button.x.replied,true,'discord.js tracks the type-12 acknowledgment');
     assert.match(f.restCalls[0].route,/\/interactions\//);
 
     const wrong=fakeInteraction('button','invite',GUILD_ID,'387323214105411599');
     await f.activity.onInteraction(wrong.x);
     assert.equal(f.restCalls.length,1,'launch blocked outside test channel');
     assert.match(wrong.calls.reply.content,/restricted/);
+
+    const rejected=fakeInteraction('button');
+    rejected.x.launchActivity=async()=> {
+      throw Object.assign(new Error('Application Activities have not been enabled'),{
+        code:50118,status:400,
+      });
+    };
+    // No secrets or interaction tokens are logged by the fallback.
+    const captured=[];
+    const prior=console.error;
+    console.error=(...args)=>captured.push(args);
+    try { await f.activity.onInteraction(rejected.x); }
+    finally { console.error=prior; }
+    assert.match(rejected.calls.reply.content,/Discord error 50118/);
+    assert.equal(rejected.calls.reply.flags,MessageFlags.Ephemeral);
+    assert.equal(rejected.calls.reply.allowedMentions.parse.length,0);
+    assert.equal(f.restCalls.length,1,'failed launch must not start a second REST callback');
+    assert.match(JSON.stringify(captured),/50118/);
+    assert.doesNotMatch(JSON.stringify(captured),/fake-interaction-token/,
+      'logs must not expose interaction credentials');
   }finally{f.clean();}
 });
 
@@ -258,4 +287,26 @@ test('compiled Activity bundle stays synchronized with its source',()=>{
   const expected=crypto.createHash('sha256').update(source).digest('hex');
   const bundle=fs.readFileSync(path.join(__dirname,'../src/scheduling/activity-public/activity.js'),'utf8');
   assert.match(bundle,new RegExp('^/\\* WinterBot Activity source SHA256: '+expected+' \\*/'));
+});
+
+
+test('test-guild diagnostic command distinguishes enabled and disabled Discord Activities',async()=>{
+  const f=fixture();
+  try {
+    f.client.application={
+      async fetch(){return {flags:{has:()=>true}};},
+    };
+    const enabled=fakeInteraction('command','status');
+    await f.activity.onInteraction(enabled.x);
+    assert.match(enabled.calls.reply.content,/ENABLED/);
+    assert.match(enabled.calls.reply.content,/URL Mappings/);
+    assert.equal(enabled.calls.reply.flags,MessageFlags.Ephemeral);
+
+    f.client.application.fetch=async()=>({flags:{has:()=>false}});
+    const disabled=fakeInteraction('command','status');
+    await f.activity.onInteraction(disabled.x);
+    assert.match(disabled.calls.reply.content,/NOT ENABLED/);
+    assert.match(disabled.calls.reply.content,/Enable Activities/);
+    assert.equal(f.sent.length,0,'diagnostics never post public channel messages');
+  }finally {f.clean();}
 });
