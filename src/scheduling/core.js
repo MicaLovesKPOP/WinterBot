@@ -31,6 +31,9 @@ function listDays(round) {
   for (let d = a; d.toMillis() <= b.toMillis(); d = d.plus({ days: 1 })) dates.push(d.toISODate());
   return Array.isArray(round.selectedDates) ? dates.filter(d => round.selectedDates.includes(d)) : dates;
 }
+function allowedWindowForDate(round, date) {
+  return round.dayLimits?.[date] || { start: '00:00', end: '24:00' };
+}
 function assertParticipant(round, userId) {
   invariant(round.participants.some(p => p.id === String(userId)), 'You are not in this scheduling round.');
 }
@@ -139,11 +142,17 @@ function setDay(round, userId, date, input, now = new Date()) {
   invariant(listDays(round).includes(date), 'Date is outside the scheduling period.');
   const status = input.status;
   invariant(['available', 'unavailable', 'unanswered'].includes(status), 'Invalid availability status.');
+  const windows = status === 'available' ? normalizeWindows(input.windows) : [];
+  if (status === 'available') {
+    const allowed = allowedWindowForDate(round, date);
+    const min = minuteOf(allowed.start), max = minuteOf(allowed.end, true);
+    invariant(windows.every(w => minuteOf(w.start) >= min && minuteOf(w.end, true) <= max),
+      'Availability on ' + date + ' must stay within the organizer\'s allowed event hours (' +
+      allowed.start + '–' + allowed.end + ').');
+  }
   if (!round.availability[userId]) round.availability[userId] = {};
   if (status === 'unanswered') delete round.availability[userId][date];
-  else round.availability[userId][date] = {
-    status, windows: status === 'available' ? normalizeWindows(input.windows) : [],
-  };
+  else round.availability[userId][date] = { status, windows };
   return round.availability[userId][date] || { status: 'unanswered', windows: [] };
 }
 function setDays(round, userId, inputs, now = new Date()) {
@@ -165,7 +174,7 @@ function candidateSlots(round, now = new Date()) {
   const durationStep = round.durationStepMinutes || 30;
   const nowMillis = new Date(now).getTime();
   for (const date of listDays(round)) {
-    const allowed = round.dayLimits?.[date] || { start: '00:00', end: '24:00' };
+    const allowed = allowedWindowForDate(round, date);
     const from = minuteOf(allowed.start);
     const until = minuteOf(allowed.end, true);
     for (let duration = shortest; duration <= longest; duration += durationStep) {
@@ -328,5 +337,5 @@ function stats(round) {
 module.exports = {
   createRound, enroll, setDay, setDays, listDays, calculateCandidates, closeCollection,
   visibleCandidates, getSlot, startVote, castVote, closeVote, advance, stats,
-  normalizeWindows, localTime, minuteOf, invariant,
+  normalizeWindows, allowedWindowForDate, localTime, minuteOf, invariant,
 };

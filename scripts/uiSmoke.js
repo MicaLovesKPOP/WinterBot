@@ -192,6 +192,92 @@ async function run() {
     assert.ok(!createdRound.round.selectedDates.includes(secondDate));
     assert.deepEqual(createdRound.round.dayLimits[firstDate],{start:'19:00',end:'23:00'});
     info('Organizer setup saves individual dates, restricted hours, duration range, destination and voice channel');
+
+    // Regression: organizer time limits must constrain every participant
+    // control, not merely the optimizer. Use Friday 17:30–24:00 plus two
+    // different limits to test bulk copy behavior.
+    const dayPlus = n => new Date(Date.parse(firstDate + 'T12:00:00Z') +
+      n * 86400000).toISOString().slice(0, 10);
+    const thirdDate = dayPlus(2);
+    const restrictedResponse = await page.request.post(base + '/api/rounds', {
+      headers: { 'X-Demo-User':'owner' },
+      data: {
+        title:'Hours restriction regression',startDate:firstDate,endDate:thirdDate,
+        timezone:'Europe/Amsterdam',durationMinutes:90,
+        dayLimits:{
+          [firstDate]:{start:'17:30',end:'24:00'},
+          [secondDate]:{start:'20:00',end:'21:00'},
+          [thirdDate]:{start:'10:00',end:'12:00'},
+        },
+      },
+    });
+    assert.equal(restrictedResponse.status(),201);
+    const restricted = (await restrictedResponse.json()).round;
+    await page.goto(base + '/?round=' + encodeURIComponent(restricted.id), {waitUntil:'networkidle'});
+    await page.locator('#persona-inline').selectOption('p1');
+    await page.getByText('Event hours for this date: 17:30–24:00.').waitFor();
+    await page.locator('[data-action="day-status"][data-status="available"]').click();
+    await page.locator('#start-0').waitFor();
+    const selectValues = async id => page.locator('#' + id + ' option').evaluateAll(
+      options => options.map(o => o.value)
+    );
+    let starts = await selectValues('start-0'), ends = await selectValues('end-0');
+    assert.equal(starts[0], '17:30','no start earlier than organizer limit');
+    assert.ok(!starts.includes('16:00'),'out-of-range starts must not be selectable');
+    assert.equal(ends.at(-1),'24:00','midnight is valid when organizer allows it');
+    assert.ok(!ends.includes('00:15'),'out-of-range end must not be selectable');
+    await page.locator('[data-action="all-day"]').click();
+    await page.waitForFunction(() => document.querySelector('#start-0')?.value === '17:30' &&
+      document.querySelector('#end-0')?.value === '24:00');
+    await page.locator('[data-action="evening"]').click();
+    await page.waitForFunction(() => document.querySelector('#start-0')?.value === '18:00' &&
+      document.querySelector('#end-0')?.value === '23:00');
+    await page.locator('[data-action="add-window"]').click();
+    await page.locator('#start-1').waitFor();
+    starts = await selectValues('start-1');
+    ends = await selectValues('end-1');
+    assert.ok(starts.every(x => x >= '17:30'),'additional windows must respect lower limit');
+    assert.ok(ends.every(x => x <= '24:00'),'additional windows must respect upper limit');
+    await page.locator('[data-action="copy-day"]').click();
+    await page.getByText(/Copied to 1 unanswered day/).waitFor();
+    const savedCopy = (await (await page.request.get(base+'/api/rounds/'+restricted.id,
+      {headers:{'X-Demo-User':'p1'}})).json()).round;
+    assert.deepEqual(savedCopy.availability.p1[secondDate].windows,
+      [{start:'20:00',end:'21:00',maxMinutes:null}],
+      'copy must intersect destination hour limits');
+    assert.ok(!savedCopy.availability.p1[thirdDate],
+      'copy must leave unanswered dates with zero overlap unanswered');
+    await page.setViewportSize({width:375,height:780});
+    const mobileOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok(mobileOverflow <= 1,'restricted editor must fit narrow mobile screens');
+
+    // Existing deployments may have replies stored before hour limits were
+    // enforced on inputs. Display only the applicable intersection, explain
+    // what happened, and allow members to save a corrected answer.
+    await scheduler.store.transaction(state => {
+      const round = state.rounds.find(r => r.id === restricted.id);
+      round.availability.p1[firstDate] = {
+        status:'available',
+        windows:[{start:'14:00',end:'20:00',maxMinutes:null}],
+      };
+    });
+    await page.setViewportSize({width:1280,height:900});
+    await page.goto(base + '/?round=' + encodeURIComponent(restricted.id), {waitUntil:'networkidle'});
+    await page.locator('#persona-inline').selectOption('p1');
+    await page.getByText(/Some previously saved hours were outside/).waitFor();
+    assert.equal(await page.locator('#start-0').inputValue(),'17:30');
+    assert.equal(await page.locator('#end-0').inputValue(),'20:00');
+    await page.locator('[data-action="all-day"]').click();
+    await page.waitForFunction(() => document.querySelector('#start-0')?.value === '17:30' &&
+      document.querySelector('#end-0')?.value === '24:00');
+    const repaired = (await (await page.request.get(base + '/api/rounds/' + restricted.id,
+      {headers:{'X-Demo-User':'p1'}})).json()).round;
+    assert.equal(repaired.availability.p1[firstDate].windows[0].start,'17:30');
+    assert.equal(repaired.availability.p1[firstDate].windows[0].end,'24:00');
+
+    assert.deepEqual(pageErrors,[]);
+    info('Member controls, presets, bulk copy and legacy replies obey individual date limits');
   } finally {
     await browser.close();
   }
