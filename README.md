@@ -188,7 +188,7 @@ Subscriber REST requests have:
 
 ## Versioning
 
-`package.json` defines the formal release baseline. WinterBot then keeps an installation-local `.versionState.json` so manual runtime code changes can still receive automatic versions without modifying tracked source files.
+**Versioning is fully automatic. Do not edit the `version` in `package.json` or root `package-lock.json` and do not run `npm version` for normal updates.** The existing `package.json` value is a historical starting baseline, not a release counter to maintain. WinterBot keeps an installation-local `.versionState.json` and calculates patch/minor increments from source changes without modifying tracked source files. AI may refine the automatic algorithm, but must never assign versions manually. See [AGENTS.md](AGENTS.md) and the [GitHub version-policy protection guide](.github/VERSIONING_PROTECTION.md).
 
 The automatic signature hashes actual file contents, not mtimes. It watches only:
 
@@ -204,7 +204,7 @@ Version behavior:
 - same watched file set with changed contents: patch bump (`2.6.1` → `2.6.2`)
 - runtime source file added, removed, or renamed: minor bump (`2.6.2` → `2.7.0`)
 - no watched-content change: no bump
-- a newer formal `package.json` release establishes the new baseline without a second automatic bump
+- existing historical `package.json` baselines are recognized for backward compatibility; **new AI-managed changes must never modify these version fields**
 
 The state file uses a versioned schema and keeps `.versionState.json.bak` as a recovery copy. Legacy size/mtime state files are safely migrated to the current release baseline rather than causing a fake version bump.
 

@@ -8,7 +8,8 @@
     "scheduler:demo": "node src/scheduling/demo.js",
     "test:ui": "node scripts/uiSmoke.js",
     "test:viewports": "node scripts/viewportAudit.js",
-    "test": "node --test",
+    "test": "npm run check:version-policy && node --test",
+    "check:version-policy": "node scripts/checkVersionPolicy.js",
     "check": "npm test && npm audit --omit=dev --audit-level=high"
   },
   "author": "",
