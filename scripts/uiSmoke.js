@@ -19,6 +19,36 @@ const scheduler = createScheduler({
 
 function info(label) { console.log('✓ ' + label); }
 
+async function assertPlanningDateControls(page, label) {
+  const metrics = await page.locator('[data-planning-date]').first().evaluate(node => {
+    const bounds = element => {
+      const r = element.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right };
+    };
+    return {
+      row: bounds(node),
+      dateCheck: bounds(node.querySelector('[data-include-date]')),
+      dateLabel: bounds(node.querySelector('.schedule-day-date span')),
+      hourCheck: bounds(node.querySelector('[data-limit-date]')),
+      pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+  assert.ok(metrics.pageOverflow <= 1, label + ': page overflows by ' + metrics.pageOverflow);
+  for (const key of ['dateCheck', 'hourCheck']) {
+    const check = metrics[key];
+    assert.ok(check.width >= 14 && check.width <= 24 &&
+      check.height >= 14 && check.height <= 24,
+      label + ': checkbox ' + key + ' should be compact and square, got ' +
+      JSON.stringify(metrics));
+  }
+  assert.ok(metrics.dateCheck.x - metrics.row.x >= 0 &&
+    metrics.dateCheck.x - metrics.row.x <= 30,
+    label + ': date checkbox must be left-aligned, got ' + JSON.stringify(metrics));
+  assert.ok(metrics.dateLabel.x >= metrics.dateCheck.right &&
+    metrics.dateLabel.x - metrics.dateCheck.right <= 20,
+    label + ': date text should sit next to its checkbox, got ' + JSON.stringify(metrics));
+}
+
 async function run() {
   await scheduler.start();
   const browser = await chromium.launch({
@@ -119,6 +149,7 @@ async function run() {
     await smallPage.goto(base,{waitUntil:'networkidle'});
     await smallPage.locator('#mobile-nav').selectOption('new');
     await smallPage.locator('[data-planning-date]').first().waitFor();
+    await assertPlanningDateControls(smallPage, '320px setup');
     const setupOverflow=await smallPage.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
     assert.ok(setupOverflow<=1,'320px mobile setup wizard must not overflow: '+setupOverflow);
     await smallPage.screenshot({path:path.join(process.cwd(),'preview-screens','mobile-setup.png'),fullPage:true});
@@ -126,6 +157,11 @@ async function run() {
     info('320px mobile setup wizard has no page-wide horizontal overflow');
 
     await page.locator('#nav-new').click();
+    await assertPlanningDateControls(page, '1280px setup');
+    await page.setViewportSize({ width: 1024, height: 860 });
+    await assertPlanningDateControls(page, '1024px setup');
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','desktop-setup.png'),fullPage:true});
+    await page.setViewportSize({ width: 1280, height: 900 });
     await page.locator('#title').fill('Voice chat event');
     await page.locator('#voiceChannelId').fill('123456789012345678');
     const dateRows=page.locator('[data-planning-date]');
