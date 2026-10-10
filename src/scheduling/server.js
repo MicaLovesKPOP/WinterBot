@@ -313,7 +313,7 @@ function createScheduler(options) {
     }
   }
 
-  async function start() {
+  async function start({ onHttpReady } = {}) {
     if (demo) await initializeDemo(store, auth);
     else await validateBotChannels(config.client, config.policy, { testMode: config.testMode });
     await tick();
@@ -328,6 +328,9 @@ function createScheduler(options) {
       httpServer.once('error', reject);
       httpServer.listen(port, host, resolve);
     });
+    // A secure public endpoint must be ready BEFORE the slash command is
+    // registered. If tunnel startup fails, no broken invitation is published.
+    if (onHttpReady) await onHttpReady({ url: 'http://' + host + ':' + port });
     if (!demo) {
       discordCommands = attachSchedulingCommands(config.client, store,
         { policy: config.policy, baseUrl: auth.base, testMode: config.testMode === true });

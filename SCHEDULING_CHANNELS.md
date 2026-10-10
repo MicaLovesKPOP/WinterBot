@@ -57,7 +57,7 @@ Guaranteed behavior:
 
 ## Permissions and secrets — later operator setup
 
-The guild, Mod, League and Public IDs above are built in as defaults. The actual #bot-logs ID comes from WinterBot's existing LOG_CHANNEL_ID.
+The guild, Mod, League and Public IDs above are built in as defaults. The actual #bot-logs ID comes from WinterBot's existing LOG_CHANNEL_ID. For a free assigned HTTPS domain with no Startup Command changes, the recommended pilot instructions are in **SCHEDULING_NGROK_SETUP.md**.
 
 The existing, NON-SECRET Discord role IDs are now provided as built-in defaults:
 
