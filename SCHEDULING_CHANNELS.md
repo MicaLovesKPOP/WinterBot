@@ -52,7 +52,7 @@ Guaranteed behavior:
 - The member channel receives only the updated invitation and confirmed-event announcements, not organizer updates or logs.
 - Management can select individual dates, optionally limit valid event hours separately for each date, and specify an event duration range with configured increments.
 - Participant availability entry uses the **same per-date event-hours limits**. For a date restricted to 17:30–24:00, the From/Until dropdowns, All allowed hours/Evening presets, additional windows, and copy-to-other-dates feature never propose times outside the permitted range. The server independently rejects forged or outdated availability submissions that exceed the limit. Previously saved responses from older versions are shown as their in-range intersection, with a notice to save a corrected answer.
-- The optimizer favors the largest full-duration attendance, with longer durations winning ties. Members can still limit their own stay within each availability window.
+- The optimizer favors the largest full-duration attendance, with longer durations winning ties. Members can optionally set **both** a maximum continuous stay for individual availability windows and a **maximum stay for the entire day**, with the stricter one determining whether they can attend the full proposed event. The day-wide cap is per-event (one event per calendar date), not permission to combine separated windows. Old saved answers without a day-wide cap remain unrestricted.
 - Optional voting excludes only losing options actually included in the ballot. Unvoted candidates survive.
 - One real WinterBot scheduled event per calendar day across all scheduling rounds.
 

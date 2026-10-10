@@ -495,3 +495,60 @@ test('real HTTP scheduling API rejects hours outside a day limit',async()=>{
     assert.ok(!t.client.sent[CHANNELS.league] && !t.client.sent[CHANNELS.public]);
   } finally {await t.stop();}
 });
+
+
+test('authenticated test-mode HTTP API saves and retains whole-day caps for verified users',async()=>{
+  const t=await appFixture(true,12201);
+  try{
+    const day=date(9);
+    const created=await t.req('POST','/api/rounds','owner',{
+      title:'Daily-cap API validation', timezone:'Europe/Amsterdam',
+      startDate:day,endDate:day,
+      minDurationMinutes:90,maxDurationMinutes:180,durationStepMinutes:30,
+    });
+    assert.equal(created.status,201,JSON.stringify(created.body));
+    const id=created.body.round.id;
+    const windows=[
+      {start:'08:30',end:'10:45',maxMinutes:null},
+      {start:'13:45',end:'18:00',maxMinutes:180},
+    ];
+    const submitted=await t.req('POST','/api/rounds/'+id+'/availability','u1',{
+      days:[{date:day,status:'available',windows,maxMinutes:120}],
+    });
+    assert.equal(submitted.status,200,JSON.stringify(submitted.body));
+    assert.equal(submitted.body.round.availability.u1[day].maxMinutes,120);
+    assert.equal(submitted.body.round.availability.u1[day].windows[1].maxMinutes,180);
+
+    const olderClient=await t.req('POST','/api/rounds/'+id+'/availability','u1',{
+      days:[{date:day,status:'available',windows:[
+        windows[0],{...windows[1],maxMinutes:135},
+      ]}],
+    });
+    assert.equal(olderClient.status,200,JSON.stringify(olderClient.body));
+    assert.equal(olderClient.body.round.availability.u1[day].maxMinutes,120,
+      'an older form submission must not silently reset the day cap');
+    assert.equal(olderClient.body.round.availability.u1[day].windows[1].maxMinutes,135);
+
+    const invalid=await t.req('POST','/api/rounds/'+id+'/availability','u1',{
+      days:[{date:day,status:'available',windows,maxMinutes:721}],
+    });
+    assert.equal(invalid.status,400);
+    const state=(await t.req('GET','/api/rounds/'+id,'u1')).body.round;
+    assert.equal(state.availability.u1[day].maxMinutes,120,
+      'invalid edits must not corrupt previously saved availability');
+    const unverified=await t.req('POST','/api/rounds/'+id+'/availability','u2',{
+      days:[{date:day,status:'available',windows,maxMinutes:120}],
+    });
+    assert.equal(unverified.status,403);
+    const cleared=await t.req('POST','/api/rounds/'+id+'/availability','u1',{
+      days:[{date:day,status:'available',windows,maxMinutes:null}],
+    });
+    assert.equal(cleared.status,200,JSON.stringify(cleared.body));
+    assert.equal(cleared.body.round.availability.u1[day].maxMinutes,undefined,
+      'explicit No overall limit clears only the day-wide cap');
+    assert.equal(cleared.body.round.availability.u1[day].windows[1].maxMinutes,180,
+      'clearing the daily cap must not touch individual window caps');
+    assert.ok(!t.client.sent[CHANNELS.league]&&!t.client.sent[CHANNELS.public]);
+    assert.equal(t.client.eventCreateCalls,0);
+  } finally {await t.stop();}
+});

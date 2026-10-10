@@ -114,6 +114,11 @@ a { color: var(--accent); }
 .segmented .option.active { background:#304267; color:var(--text); }
 .segmented .option[data-status=available].active { background:#245544; color:#b8ffe4; }
 .segmented .option[data-status=unavailable].active { background:#573541; color:#ffcad2; }
+.day-wide-cap { display:grid; grid-template-columns:minmax(210px, 270px) minmax(0,1fr); gap:18px; align-items:center; border:1px solid #456481; background:#192b41; padding:16px; border-radius:14px; }
+.day-wide-cap .field label { color:#b6c9e8; }
+.day-wide-cap .muted { line-height:1.55; }
+.warn-text { color:#ffdfa4; margin-top:6px; }
+@media(max-width:680px) { .day-wide-cap { grid-template-columns:minmax(0,1fr); gap:9px; } }
 .window { background:#101a2c; border:1px solid var(--line); border-radius:15px; padding:17px; display:grid; gap:15px; }
 .window-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .window-controls { display:grid; grid-template-columns:1fr 1fr 1.15fr; gap:12px; }

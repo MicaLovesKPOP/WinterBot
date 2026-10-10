@@ -143,7 +143,15 @@ function setDay(round, userId, date, input, now = new Date()) {
   const status = input.status;
   invariant(['available', 'unavailable', 'unanswered'].includes(status), 'Invalid availability status.');
   const windows = status === 'available' ? normalizeWindows(input.windows) : [];
+  // Missing maxMinutes preserves an already saved day cap. This matters for
+  // older clients and per-window autosaves; explicit null removes the cap.
+  const previous = round.availability[userId]?.[date];
+  const suppliedCap = Object.hasOwn(input, 'maxMinutes') ? input.maxMinutes : previous?.maxMinutes;
+  const dayMaxMinutes = suppliedCap == null || suppliedCap === '' ? null : Number(suppliedCap);
   if (status === 'available') {
+    invariant(dayMaxMinutes == null || (Number.isInteger(dayMaxMinutes) &&
+      dayMaxMinutes >= 15 && dayMaxMinutes <= 720 && dayMaxMinutes % 15 === 0),
+      'Maximum stay for the day must be 15–720 minutes in 15-minute increments.');
     const allowed = allowedWindowForDate(round, date);
     const min = minuteOf(allowed.start), max = minuteOf(allowed.end, true);
     invariant(windows.every(w => minuteOf(w.start) >= min && minuteOf(w.end, true) <= max),
@@ -152,7 +160,10 @@ function setDay(round, userId, date, input, now = new Date()) {
   }
   if (!round.availability[userId]) round.availability[userId] = {};
   if (status === 'unanswered') delete round.availability[userId][date];
-  else round.availability[userId][date] = { status, windows };
+  else round.availability[userId][date] = {
+    status, windows,
+    ...(status === 'available' && dayMaxMinutes != null ? { maxMinutes: dayMaxMinutes } : {}),
+  };
   return round.availability[userId][date] || { status: 'unanswered', windows: [] };
 }
 function setDays(round, userId, inputs, now = new Date()) {
@@ -189,7 +200,8 @@ function candidateSlots(round, now = new Date()) {
         if (end.toISODate() !== ed || end.toFormat('HH:mm') !== et || end.offset !== start.offset) continue;
         const availableIds = round.participants.filter(p => {
           const entry = round.availability[p.id]?.[date];
-          if (!entry || entry.status !== 'available') return false;
+          if (!entry || entry.status !== 'available' ||
+              (entry.maxMinutes != null && entry.maxMinutes < duration)) return false;
           return entry.windows.some(w => minuteOf(w.start) <= m &&
             minuteOf(w.end, true) >= m + duration &&
             (w.maxMinutes == null || w.maxMinutes >= duration));
