@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node WinterBot.js",
     "scheduler:demo": "node src/scheduling/demo.js",
+    "build:activity": "node scripts/buildActivity.js",
+    "test:activity:browser": "node scripts/activitySmoke.js",
     "test:ui": "node scripts/uiSmoke.js",
     "test:viewports": "node scripts/viewportAudit.js",
     "test": "npm run check:version-policy && node --test",
@@ -24,6 +26,8 @@
     "node": ">=18.20.0"
   },
   "devDependencies": {
+    "@discord/embedded-app-sdk": "2.5.0",
+    "esbuild": "0.28.2",
     "playwright-core": "^1.64.0"
   }
 }

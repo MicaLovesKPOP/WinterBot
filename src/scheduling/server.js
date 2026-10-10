@@ -179,6 +179,14 @@ function createScheduler(options) {
     const u = new URL(req.url || '/', auth.base);
     const pathname = u.pathname;
     try {
+      if (pathname.startsWith('/activity/')) {
+        if (!config.activityTest) throw httpError(404, 'Activity test mode is not enabled.');
+        // A Discord Activity must render in Discord's cross-origin iframe;
+        // the ordinary planner's SAMEORIGIN policy stays in place.
+        res.removeHeader('X-Frame-Options');
+        res.setHeader('Content-Security-Policy', 'frame-ancestors https://discord.com https://*.discord.com https://*.discordapp.com https://*.discordsays.com');
+        return await config.activityTest.handle(req, res, u);
+      }
       if (req.method === 'GET' && pathname === '/health') {
         return send(res, 200, { ok: true, mode: options.mode, rounds: store.read().rounds.length });
       }
@@ -335,12 +343,17 @@ function createScheduler(options) {
       discordCommands = attachSchedulingCommands(config.client, store,
         { policy: config.policy, baseUrl: auth.base, testMode: config.testMode === true });
       await discordCommands.initialize();
+      if (config.activityTest) {
+        try { await config.activityTest.start(); }
+        catch (error) { await reportIssue('activityTest.start', error); }
+      }
     }
     timer = setInterval(() => tick().catch(error => reportIssue('deadline.check',error).catch(()=>{})), 10000);
     timer.unref?.();
     return { url: 'http://' + host + ':' + port, store };
   }
   async function stop() {
+    config.activityTest?.stop();
     discordCommands?.stop();
     discordCommands = null;
     if (timer) clearInterval(timer);
