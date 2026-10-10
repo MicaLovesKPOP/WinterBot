@@ -540,6 +540,14 @@ test('authenticated test-mode HTTP API saves and retains whole-day caps for veri
       days:[{date:day,status:'available',windows,maxMinutes:120}],
     });
     assert.equal(unverified.status,403);
+    const cleared=await t.req('POST','/api/rounds/'+id+'/availability','u1',{
+      days:[{date:day,status:'available',windows,maxMinutes:null}],
+    });
+    assert.equal(cleared.status,200,JSON.stringify(cleared.body));
+    assert.equal(cleared.body.round.availability.u1[day].maxMinutes,undefined,
+      'explicit No overall limit clears only the day-wide cap');
+    assert.equal(cleared.body.round.availability.u1[day].windows[1].maxMinutes,180,
+      'clearing the daily cap must not touch individual window caps');
     assert.ok(!t.client.sent[CHANNELS.league]&&!t.client.sent[CHANNELS.public]);
     assert.equal(t.client.eventCreateCalls,0);
   } finally {await t.stop();}
