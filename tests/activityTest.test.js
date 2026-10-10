@@ -283,8 +283,9 @@ test('test vote posts a separate new notification and never creates a real event
 });
 
 test('compiled Activity bundle stays synchronized with its source',()=>{
-  const source=fs.readFileSync(path.join(__dirname,'../src/scheduling/activity-client/main.js'));
-  const expected=crypto.createHash('sha256').update(source).digest('hex');
+  const source=fs.readFileSync(path.join(__dirname,'../src/scheduling/activity-client/main.js'),'utf8')
+    .replace(/\r\n/g,'\n');
+  const expected=crypto.createHash('sha256').update(source,'utf8').digest('hex');
   const bundle=fs.readFileSync(path.join(__dirname,'../src/scheduling/activity-public/activity.js'),'utf8');
   assert.match(bundle,new RegExp('^/\\* WinterBot Activity source SHA256: '+expected+' \\*/'));
 });
