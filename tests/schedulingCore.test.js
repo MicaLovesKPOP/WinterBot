@@ -473,3 +473,102 @@ test('concurrent scheduling invitations do not create duplicate Discord messages
     assert.equal(store.read().rounds[0].announcementMessageId,'announcement-message');
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+
+test('day-wide maximum stay is optional, survives older window edits and clears explicitly', () => {
+  const r = roundWithPeople(2,{ endDate:futureDate() });
+  const day = futureDate();
+  const windows = [fullWindow('08:30','10:45'),fullWindow('13:45','18:00',180)];
+  setDay(r,'p0',day,{status:'available',windows,maxMinutes:120});
+  assert.equal(r.availability.p0[day].maxMinutes,120);
+  assert.equal(r.availability.p0[day].windows[1].maxMinutes,180);
+
+  // Old clients / individual autosaves submit only windows. The day cap
+  // must not get silently wiped by those older requests.
+  setDays(r,'p0',[{date:day,status:'available',
+    windows:[fullWindow('08:30','10:45'),fullWindow('14:00','18:00',165)]}]);
+  assert.equal(r.availability.p0[day].maxMinutes,120);
+  assert.equal(r.availability.p0[day].windows[1].maxMinutes,165);
+
+  setDay(r,'p0',day,{status:'available',windows,maxMinutes:null});
+  assert.equal(Object.hasOwn(r.availability.p0[day],'maxMinutes'),false);
+  setDay(r,'p0',day,{status:'available',windows,maxMinutes:90});
+  setDay(r,'p0',day,{status:'unavailable'});
+  assert.deepEqual(r.availability.p0[day],{status:'unavailable',windows:[]});
+  setDay(r,'p0',day,{status:'available',windows});
+  assert.equal(r.availability.p0[day].maxMinutes,undefined);
+});
+
+test('day-wide and per-window maximum stays both limit full-duration attendance',()=>{
+  const day=futureDate();
+  const r=roundWithPeople(2,{
+    endDate:day,durationMinutes:120,minDurationMinutes:120,maxDurationMinutes:120,
+  });
+  setDay(r,'p0',day,{status:'available',maxMinutes:120,
+    windows:[fullWindow('08:30','10:45'),fullWindow('13:45','18:00',180)]});
+  setDay(r,'p1',day,{status:'available',
+    windows:[fullWindow('08:30','10:45'),fullWindow('13:45','18:00')]});
+  const short=calculateCandidates(r);
+  assert.equal(short.bestAttendance,2);
+  assert.ok(short.candidates.some(c=>c.availableIds.includes('p0')));
+  // A 150-minute event is too long for p0's whole-day limit, even
+  // though the afternoon window independently permits 180 minutes.
+  r.durationMinutes=150;
+  r.minDurationMinutes=150;
+  r.maxDurationMinutes=150;
+  const long=calculateCandidates(r);
+  assert.equal(long.bestAttendance,1);
+  assert.ok(long.candidates.length>0);
+  assert.ok(long.candidates.every(c=>c.availableIds.includes('p1') &&
+    !c.availableIds.includes('p0')));
+
+  // Raising the day cap doesn't override a window-specific cap.
+  setDay(r,'p0',day,{status:'available',maxMinutes:180,
+    windows:[fullWindow('08:30','10:45'),fullWindow('13:45','18:00',90)]});
+  const cappedWindow=calculateCandidates(r);
+  assert.ok(cappedWindow.candidates.every(c=>!c.availableIds.includes('p0')));
+});
+
+test('whole-day cap never stitches separate availability windows together',()=>{
+  const day=futureDate();
+  const r=roundWithPeople(1,{
+    endDate:day,durationMinutes:120,
+  });
+  setDay(r,'p0',day,{status:'available',maxMinutes:240,
+    windows:[fullWindow('09:00','10:00'),fullWindow('10:30','11:30')]});
+  const result=calculateCandidates(r);
+  assert.equal(result.bestAttendance,0,'two separate one-hour windows cannot make a two-hour event');
+  assert.deepEqual(result.candidates,[]);
+});
+
+test('invalid whole-day limits reject atomically without affecting other saved dates',()=>{
+  const r=roundWithPeople(2);
+  const first=futureDate(),second=futureDate(10);
+  const windows=[fullWindow('08:30','10:45'),fullWindow('13:45','18:00')];
+  setDay(r,'p0',first,{status:'available',windows,maxMinutes:90});
+  const before=structuredClone(r.availability);
+  for(const maxMinutes of [-15,0,1,16,721,900,'abc',45.5]) {
+    assert.throws(()=>setDay(r,'p0',first,{status:'available',windows,maxMinutes}),
+      /Maximum stay for the day/,'cap '+String(maxMinutes));
+  }
+  assert.throws(()=>setDays(r,'p0',[
+    {date:second,status:'available',windows,maxMinutes:120},
+    {date:first,status:'available',windows,maxMinutes:47},
+  ]),/Maximum stay for the day/);
+  assert.deepEqual(r.availability,before);
+});
+
+test('older availability entries without a whole-day cap remain fully compatible',()=>{
+  const r=roundWithPeople(1,{endDate:futureDate(),durationMinutes:120});
+  const day=futureDate();
+  // Mimics data stored by WinterBot before the extra field existed.
+  r.availability.p0={[day]:{status:'available',windows:[
+    fullWindow('13:45','18:00',null),
+  ]}};
+  assert.equal(calculateCandidates(r).bestAttendance,1);
+  setDay(r,'p0',day,{status:'available',windows:[
+    fullWindow('13:45','18:00',null),
+  ]});
+  assert.equal(calculateCandidates(r).bestAttendance,1);
+  assert.equal(Object.hasOwn(r.availability.p0[day],'maxMinutes'),false);
+});

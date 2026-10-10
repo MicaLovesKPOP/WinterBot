@@ -268,6 +268,21 @@ function renderAvailabilityEditor() {
         'All day · 00–24', 'all-day', 'small') +
       (evening ? btn('Evening · ' + evening.start + '–' + evening.end, 'evening', 'small') : '') +
       '</div>';
+    // This is independent of the window caps: the stricter limit wins.
+    // Because WinterBot schedules at most one event per date, this limits
+    // the duration of that single event rather than summing separate windows.
+    const dayCapMax = Math.max(15, Math.min(720, r.maxDurationMinutes || r.durationMinutes || 720));
+    html += '<div class="day-wide-cap"><div class="field"><label for="day-cap">Maximum stay for the whole day</label>' +
+      '<select class="select" id="day-cap" aria-describedby="day-cap-help">' +
+      capOptions({start:'00:00', end:clockValue(dayCapMax), maxMinutes:entry.maxMinutes ?? null})
+      .replace('>No limit</option>', '>No overall limit</option>') +
+      '</select></div><div class="muted small" id="day-cap-help">' +
+      'Optional. Applies to any one event on this date, whichever availability window it falls in. ' +
+      'If a window has its own maximum, the shorter limit applies.' +
+      (entry.maxMinutes != null && entry.maxMinutes < (r.minDurationMinutes || r.durationMinutes)
+        ? '<div class="warn-text">This is shorter than the minimum event duration; you will not count as available for an entire event on this date.</div>'
+        : '') +
+      '</div></div>';
     entry.windows.forEach((w, i) => {
       html += '<div class="window"><div class="window-head"><strong>Availability window ' + (i + 1) +
         '</strong>' + btn('Remove', 'remove-window', 'ghost small', 'data-index="' + i + '"') + '</div>' +
@@ -281,7 +296,8 @@ function renderAvailabilityEditor() {
         '" data-window="' + i + '" data-field="maxMinutes">' + capOptions(w) + '</select></div></div></div>';
     });
     html += btn('＋ Add another window', 'add-window') +
-      '<div class="info-line">Example: available 18:00–23:00 with a 2-hour maximum means any suitable 2-hour event in that window works.</div>';
+      '<div class="info-line">The whole-day limit applies to every window. Individual windows can have shorter limits. ' +
+      'Each event must fit completely inside one continuous availability window.</div>';
   } else {
     html += '<div class="note">' + (entry.status === 'unavailable'
       ? 'You have marked this entire day unavailable. No event time on this day will count you as available.'
@@ -299,6 +315,7 @@ function fitsMyAvailability(option) {
   if (entry.status !== 'available') return false;
   const minute = time => Number(time.split(':')[0]) * 60 + Number(time.split(':')[1]);
   const duration = option.durationMinutes || state.round.durationMinutes;
+  if (entry.maxMinutes != null && duration > entry.maxMinutes) return false;
   const start = minute(option.time), end = start + duration;
   return entry.windows.some(w => minute(w.start) <= start && minute(w.end) >= end &&
     (w.maxMinutes == null || w.maxMinutes >= duration));
@@ -406,7 +423,12 @@ function candidateBoard() {
       const retry = publishedHere && publishedHere.candidateId === c.id &&
         !['created','simulated'].includes(publishedHere.status);
       const scheduled = Boolean(publishedHere && !retry);
-      const attendees = r.participants.filter(p => c.availableIds.includes(p.id)).map(p => escapeHtml(p.name));
+      // An identity/round refresh can briefly race another persona's
+      // privacy-filtered response. Keep the organizer view responsive
+      // without inventing attendee names until private detail arrives.
+      const attendees = Array.isArray(c.availableIds)
+        ? r.participants.filter(p => c.availableIds.includes(p.id)).map(p => escapeHtml(p.name))
+        : null;
       const share = r.participants.length ? Math.round(c.count / r.participants.length * 100) : 0;
       const ballotOption = r.ballot?.options.find(o => o.candidateId === c.id);
       const resultLabel = r.ballot && r.phase === 'final'
@@ -436,7 +458,8 @@ function candidateBoard() {
         (scheduled ? '<span class="pill">Day already scheduled</span>' : '') +
         (retry ? '<span class="pill warn">Retry publication</span>' : '') + '</div></div>';
       html += '<details><summary>Who can attend (' + c.count + ')</summary><p>' +
-        attendees.join(', ') + '</p></details></div>';
+        (attendees == null ? 'Organizer details are loading; refresh to see names.' : attendees.join(', ')) +
+        '</p></details></div>';
     });
     html += '</div></div>';
   });
@@ -693,7 +716,8 @@ async function handleAction(node) {
     const days = dates.map(date => {
       if (entry.status !== 'available') return { date, status: entry.status, windows: [] };
       const windows = usableWindows(sourceWindows, date);
-      return windows.length ? { date, status: 'available', windows } : null;
+      return windows.length ? { date, status: 'available', windows,
+        maxMinutes: entry.maxMinutes ?? null } : null;
     }).filter(Boolean);
     const skipped = dates.length - days.length;
     if (!days.length) return announce('No days copied: your hours do not overlap the other dates\' allowed event hours.', true);
@@ -814,6 +838,12 @@ document.addEventListener('change', event => {
     if (node.checked) state.votePicked.add(node.dataset.vote);
     else state.votePicked.delete(node.dataset.vote);
     return;
+  }
+  if (node.id === 'day-cap') {
+    const maxMinutes = node.value === '' ? null : Number(node.value);
+    return saveDays([{date: state.day, status:'available',
+      windows:currentWindows(), maxMinutes}], 'Daily maximum stay saved')
+      .catch(error => { announce(error.message, true); render(); });
   }
   if (node.hasAttribute('data-window')) {
     const windows = currentWindows();

@@ -43,6 +43,8 @@ The latest branch implements /schedule create and /schedule manage as Management
 - Every day has exactly one state: **unanswered**, **unavailable**, or **available**.
 - Available days contain 1–10 non-overlapping windows. Time inputs use 15-minute increments.
 - Each window can optionally cap the attendee's **maximum continuous stay**. A 2-hour event fits any 2-hour position inside an 18:00–23:00 availability window capped at 120 minutes.
+- Each available day additionally supports an **optional overall maximum stay**, which applies to every window that day. For example, morning 08:30–10:45 and afternoon 13:45–18:00 with a whole-day maximum of 120 minutes means the member can attend any continuous event up to two hours inside either window; even an afternoon window independently capped at three hours cannot override the two-hour day maximum. It never combines disconnected windows. Both caps are optional, and the more restrictive cap applies.
+- The new whole-day field is backward compatible: existing saved availability without it has **no day-wide cap**. Window-only edits from older browser versions preserve a cap already saved; explicit No overall limit clears it. Copy-to-unanswered dates carries the cap with any valid copied windows.
 - Day periods use one configurable IANA time zone (default Europe/Amsterdam). An ending time of 24:00 denotes midnight.
 - Cross-midnight individual windows are not implemented. Enter the next day's hours on the next date.
 - Events crossing a daylight-saving offset change and ambiguous start instants are skipped rather than silently producing the wrong time.

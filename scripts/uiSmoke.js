@@ -276,8 +276,76 @@ async function run() {
     assert.equal(repaired.availability.p1[firstDate].windows[0].start,'17:30');
     assert.equal(repaired.availability.p1[firstDate].windows[0].end,'24:00');
 
-    assert.deepEqual(pageErrors,[]);
     info('Member controls, presets, bulk copy and legacy replies obey individual date limits');
+
+    // The whole-day maximum is a separate control from individual-window caps.
+    // Recreate two realistic windows and verify save/refresh/window edits/copy.
+    const capDay = dayPlus(4), capNext = dayPlus(5);
+    const capCreate = await page.request.post(base + '/api/rounds', {
+      headers:{ 'X-Demo-User':'owner' },
+      data:{
+        title:'Daily maximum attendance test', startDate:capDay, endDate:capNext,
+        timezone:'Europe/Amsterdam',durationMinutes:120,
+        minDurationMinutes:90,maxDurationMinutes:180,durationStepMinutes:30,
+        dayLimits:{[capNext]:{start:'14:00',end:'18:00'}},
+      },
+    });
+    assert.equal(capCreate.status(),201);
+    const capRound = (await capCreate.json()).round;
+    const capReply = await page.request.post(base + '/api/rounds/' + capRound.id + '/availability', {
+      headers:{ 'X-Demo-User':'p1' },
+      data:{days:[{date:capDay,status:'available',windows:[
+        {start:'08:30',end:'10:45',maxMinutes:null},
+        {start:'13:45',end:'18:00',maxMinutes:180},
+      ]}]},
+    });
+    assert.equal(capReply.status(),200);
+    await page.goto(base + '/?round=' + encodeURIComponent(capRound.id), {waitUntil:'networkidle'});
+    await page.locator('#persona-inline').selectOption('p1');
+    await page.locator('#day-cap').waitFor();
+    assert.equal(await page.locator('#day-cap').inputValue(),'');
+    assert.equal(await page.locator('#cap-1').inputValue(),'180');
+    await page.locator('#day-cap').selectOption('120');
+    await page.getByText('Daily maximum stay saved').waitFor();
+    const readCapRound=async()=> (await (await page.request.get(
+      base + '/api/rounds/' + capRound.id,{headers:{'X-Demo-User':'p1'}})).json()).round;
+    let afterCap = await readCapRound();
+    assert.equal(afterCap.availability.p1[capDay].maxMinutes,120);
+    assert.equal(afterCap.availability.p1[capDay].windows[1].maxMinutes,180);
+    await page.reload({waitUntil:'networkidle'});
+    assert.equal(await page.locator('#day-cap').inputValue(),'120');
+    await page.locator('#cap-1').selectOption('135');
+    await page.getByText('Availability saved').waitFor();
+    afterCap = await readCapRound();
+    assert.equal(afterCap.availability.p1[capDay].maxMinutes,120,
+      'per-window edits must preserve the day-wide maximum');
+    assert.equal(afterCap.availability.p1[capDay].windows[1].maxMinutes,135);
+    await page.locator('[data-action="add-window"]').click();
+    await page.locator('#start-2').waitFor();
+    assert.equal((await readCapRound()).availability.p1[capDay].maxMinutes,120,
+      'adding a third window must preserve day cap');
+    await page.locator('[data-action="copy-day"]').click();
+    await page.getByText(/Copied to 1 unanswered day/).waitFor();
+    afterCap = await readCapRound();
+    assert.equal(afterCap.availability.p1[capNext].maxMinutes,120,
+      'copying available hours must also copy the whole-day maximum');
+    assert.ok(afterCap.availability.p1[capNext].windows.every(w =>
+      w.start >= '14:00' && w.end <= '18:00'));
+    await page.locator('#day-cap').selectOption('');
+    await page.getByText('Daily maximum stay saved').waitFor();
+    afterCap = await readCapRound();
+    assert.equal(afterCap.availability.p1[capDay].maxMinutes,undefined,
+      'No overall limit must explicitly clear it on the current day');
+    assert.equal(afterCap.availability.p1[capNext].maxMinutes,120,
+      'clearing one day must not change another day');
+    await page.setViewportSize({width:375,height:820});
+    await page.locator('#day-cap').waitFor();
+    const capOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok(capOverflow<=1,'day maximum control must not cause mobile overflow');
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','mobile-day-cap.png'),fullPage:true});
+    assert.deepEqual(pageErrors,[]);
+    info('Day-wide maximum survives refresh/window edits, propagates on copy and clears independently');
   } finally {
     await browser.close();
   }
