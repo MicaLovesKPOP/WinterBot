@@ -111,6 +111,7 @@ test('invitation and TEST simulated event are professionally structured Discord 
 function fixture(allowRealEvents=false) {
   const sent = {};
   let eventCreateCalls=0;
+  let commandCreates=0;
   let newMessage=0;
   const botUser={id:'987654321098765432'};
   const roleIds={owner:[MANAGEMENT,VERIFY1,VERIFY2],u1:[VERIFY1,VERIFY2],u2:[VERIFY1]};
@@ -154,7 +155,7 @@ function fixture(allowRealEvents=false) {
     roles:{fetch:async id=>({id,guild:{id:CHANNELS.guildId}})},
     members:{fetch:async({user})=>members.get(user)||Promise.reject(new Error('Not a member'))},
     channels:{fetch:async id=>channels.get(id)},
-    commands:{create:async()=>({})},
+    commands:{create:async()=>{commandCreates++;return {};}},
     scheduledEvents:{fetch:async()=>new Collection(),create:async opts=>{
       eventCreateCalls++;
       if (!allowRealEvents) throw new Error('TEST MODE MUST NEVER CREATE A REAL EVENT');
@@ -162,7 +163,9 @@ function fixture(allowRealEvents=false) {
     }},
   };
   const client={user:botUser,guilds:{fetch:async()=>guild},on(){},off(){}};
-  return {client,channels,sent,get eventCreateCalls(){return eventCreateCalls;}};
+  return {client,channels,sent,
+    get eventCreateCalls(){return eventCreateCalls;},
+    get commandCreates(){return commandCreates;}};
 }
 function headers(id,secret,host,post=false) {
   const payload=Buffer.from(JSON.stringify({id,name:id,exp:Date.now()+600000})).toString('base64url');
@@ -404,4 +407,30 @@ test('official Management and both checkmark role IDs work without extra env con
   // just to identify the existing roles in this specific Discord server.
   assert.equal(policy.managementRoleId,MANAGEMENT);
   assert.deepEqual(policy.verifiedRoleIds,[VERIFY1,VERIFY2]);
+});
+
+
+test('HTTPS tunnel readiness gate runs before publishing the Discord slash command', async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'winterbot-ngrok-gate-'));
+  const mocked=fixture();
+  const scheduler=createScheduler({
+    mode:'live',host:'127.0.0.1',port:12197,
+    client:mocked.client,guildId:CHANNELS.guildId,
+    policy,logChannelId:LOGS,channelId:CHANNELS.mod,
+    testMode:true,clientId:'client-id',clientSecret:'dummy-secret',
+    sessionSecret:'a-long-private-session-secret-for-tests',
+    baseUrl:'https://winterbot-test.ngrok-free.dev',
+    dataFile:path.join(dir,'scheduling.json'),
+  });
+  try {
+    await assert.rejects(
+      scheduler.start({onHttpReady:async()=>{throw new Error('HTTPS tunnel unavailable');}}),
+      /HTTPS tunnel unavailable/
+    );
+    assert.equal(mocked.commandCreates,0,
+      'WinterBot must never advertise /schedule create before HTTPS hosting is ready');
+  } finally {
+    await scheduler.stop();
+    fs.rmSync(dir,{recursive:true,force:true});
+  }
 });

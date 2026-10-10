@@ -21,7 +21,7 @@ WinterBot also includes a mobile-friendly scheduling planner that collects each 
 
 **Try it without Discord credentials:** run `npm ci`, then `npm run scheduler:demo` and open `http://127.0.0.1:8791` on the same computer. The demo cannot post to Discord or create real events. Switch between sample participants and Organizer to test all stages.
 
-See **[SCHEDULING.md](SCHEDULING.md)** for the complete UX, rules, architecture, testing steps, opt-in live OAuth setup and limitations. The new **[channel routing and TEST mode guide](SCHEDULING_CHANNELS.md)** documents Management-only setup, default League / optional Public invitations, and safe end-to-end simulations confined to #bot-logs. The browser planner is implemented; embedded Discord Activity launching and live-server end-to-end verification are future steps. Do not enable `SCHEDULING_ENABLED=1` on a production server before completing live testing.
+See **[SCHEDULING.md](SCHEDULING.md)** for the complete UX, rules, architecture, testing steps, opt-in live OAuth setup and limitations. The new **[channel routing and TEST mode guide](SCHEDULING_CHANNELS.md)** documents Management-only setup, default League / optional Public invitations, and safe end-to-end simulations confined to #bot-logs. The browser planner is implemented; embedded Discord Activity launching and live-server end-to-end verification are future steps. For secure test-only access on DiscordBotHosting without changing its Startup Command, see **[the ngrok HTTPS setup guide](SCHEDULING_NGROK_SETUP.md)**. Do not enable `SCHEDULING_ENABLED=1` on a production server before completing live testing.
 
 ## Runtime
 

@@ -14,6 +14,7 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 let client = null;
 let schedulingServer = null;
+let schedulingNgrokTunnel = null;
 let shuttingDown = false;
 
 async function withTimeout(promise, timeoutMs, label) {
@@ -55,6 +56,15 @@ async function shutdown(reason, exitCode = 0, error = null) {
   try {
     stopEventHandlers();
   } catch (_) {}
+
+  try {
+    if (schedulingNgrokTunnel) {
+      await withTimeout(schedulingNgrokTunnel.close(), 4_000, 'Scheduling ngrok tunnel shutdown');
+      schedulingNgrokTunnel = null;
+    }
+  } catch (error) {
+    try { await logError('app.shutdown.schedulingNgrok', error); } catch (_) {}
+  }
 
   try {
     if (schedulingServer) {
@@ -163,6 +173,8 @@ async function bootstrap() {
       const config = require('./src/config').getConfig();
       const { createScheduler } = require('./src/scheduling/server');
       const { configureChannelPolicy } = require('./src/scheduling/channelPolicy');
+      const { getSchedulingNgrokSettings, startSchedulingNgrokTunnel } = require('./src/scheduling/ngrokTunnel');
+      const ngrokSettings = getSchedulingNgrokSettings(process.env);
       const policy = configureChannelPolicy({
         guildId: config.guildId, logChannelId: config.logChannelId, demo: false,
       });
@@ -177,15 +189,29 @@ async function bootstrap() {
         clientId: process.env.DISCORD_CLIENT_ID,
         clientSecret: process.env.DISCORD_CLIENT_SECRET,
         sessionSecret: process.env.SCHEDULING_SESSION_SECRET,
-        baseUrl: process.env.SCHEDULING_BASE_URL,
+        baseUrl: ngrokSettings?.baseUrl || process.env.SCHEDULING_BASE_URL,
         adminIds: String(process.env.SCHEDULING_ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean),
         host: process.env.SCHEDULING_HOST || '127.0.0.1',
         port: Number(process.env.SCHEDULING_PORT || 8791),
       });
-      const { url } = await schedulingServer.start();
+      const { url } = await schedulingServer.start({
+        onHttpReady: ngrokSettings ? async () => {
+          schedulingNgrokTunnel = await startSchedulingNgrokTunnel(ngrokSettings, {
+            onStatusChange: status => {
+              // No secret values or authentication tokens are logged.
+              logInfo('Scheduling ngrok tunnel status: ' + String(status).slice(0, 35),
+                { source: 'scheduling.ngrok.status' });
+            },
+          });
+          logInfo('Scheduling TEST planner accessible at ' + schedulingNgrokTunnel.url,
+            { source: 'scheduling.ngrok.start' });
+        } : undefined,
+      });
       logInfo('Scheduling web server running at ' + url, { source: 'scheduling.start' });
     } catch (error) {
       // Log the failure but continue running WinterBot's existing features.
+      try { if (schedulingNgrokTunnel) await schedulingNgrokTunnel.close(); } catch (_) {}
+      schedulingNgrokTunnel = null;
       try {
         if (schedulingServer) await schedulingServer.stop();
       } catch (_) {}

@@ -84,6 +84,10 @@ The latest branch implements /schedule create and /schedule manage as Management
 - The local demo accepts identity switching but binds **only to localhost** and never creates real Discord events. Do not tunnel it onto the public internet.
 - A live event becomes visible to WinterBot's **existing registration tracker**, which remains separate.
 
+## Built-in ngrok HTTPS test option
+
+For DiscordBotHosting's read-only Startup Command, WinterBot can now start ngrok's official Node SDK inside its existing process. This is **test-mode only** and requires both `SCHEDULING_ENABLED=1` and `SCHEDULING_TEST_MODE=1`, plus `SCHEDULING_NGROK_ENABLED=1`. It derives the correct `SCHEDULING_BASE_URL` from your assigned development domain and closes the public tunnel on bot shutdown. See **[SCHEDULING_NGROK_SETUP.md](SCHEDULING_NGROK_SETUP.md)** for the ngrok token, Discord OAuth redirect and exact private `.env` instructions. No additional Node process, custom domain or editable startup command is needed.
+
 ## Opt-in live Discord setup
 
 After verifying in a test server, add the following settings to the existing .env:
