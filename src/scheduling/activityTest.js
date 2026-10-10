@@ -9,7 +9,7 @@ const path = require('node:path');
 const { DateTime } = require('luxon');
 const {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder,
-  PermissionFlagsBits, SlashCommandBuilder, MessageFlags, Routes,
+  PermissionFlagsBits, SlashCommandBuilder, MessageFlags, ApplicationFlags,
 } = require('discord.js');
 const { SchedulingStore } = require('./store');
 const {
@@ -265,6 +265,7 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       .setDMPermission(false)
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
       .addSubcommand(x => x.setName('invite').setDescription('Post a private-server Activity test invitation'))
+      .addSubcommand(x => x.setName('status').setDescription('Check whether Discord has enabled the test Activity'))
       .addSubcommand(x => x.setName('vote').setDescription('Close test availability and open a test ballot'))
       .addSubcommand(x => x.setName('reset').setDescription('Reset isolated Activity test data'));
   }
@@ -280,15 +281,35 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
         return interaction.reply({ content: 'This Activity is restricted to the WinterBot test channel.',
           flags: MessageFlags.Ephemeral });
       }
-      // Discord API callback 12 launches the app's Activity in this channel.
-      // A normal reply() cannot express callback 12 in discord.js 14.
+      // Discord.js handles type-12 LAUNCH_ACTIVITY callbacks directly.
+      // Unlike a normal bot-authenticated REST call, interaction responses
+      // MUST use auth:false. The supported method also tracks ACK state.
       try {
-        await client.rest.post(Routes.interactionCallback(interaction.id, interaction.token),
-          { body: { type: 12 } });
+        await interaction.launchActivity();
       } catch (error) {
-        await interaction.reply({ content: 'Discord could not launch the Activity. Check that Activities and URL Mapping are enabled in the Developer Portal. (' +
-          String(error.message).slice(0, 140) + ')',
-        flags: MessageFlags.Ephemeral }).catch(() => {});
+        const code = Number(error?.code) || null;
+        const status = Number(error?.status) || null;
+        const detail = String(error?.message || 'Unknown Discord API error')
+          .replace(/\s+/g, ' ').slice(0, 180);
+        // No interaction IDs, tokens, bot tokens or OAuth secrets in logs.
+        console.error('WinterBot test Activity launch failed:', {
+          code, status, detail,
+        });
+        // An actionable private reply is much better than silently letting
+        // the interaction time out. If Discord rejected the ACK too late,
+        // preserve the diagnostic in the host console.
+        await interaction.reply({
+          content: 'WinterBot could not launch the Discord Activity. ' +
+            'Check Activities are enabled for WinterBot in the Developer Portal. ' +
+            (code ? 'Discord error ' + code + '. ' : '') + detail,
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        }).catch(replyError => {
+          console.error('WinterBot test Activity error reply also failed:', {
+            code: Number(replyError?.code) || null,
+            status: Number(replyError?.status) || null,
+          });
+        });
       }
       return;
     }
@@ -300,6 +321,23 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       assert(owner || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild),
         'Manage Server permission is required for test setup.', 403);
       const option = interaction.options.getSubcommand();
+      if (option === 'status') {
+        const app = await client.application.fetch();
+        const enabled = Boolean(app.flags?.has(ApplicationFlags.Embedded));
+        await interaction.reply({
+          content: enabled
+            ? 'Discord reports that WinterBot Activities are ENABLED. ' +
+              'If the launch button fails, check Activities → URL Mappings in the Developer Portal. ' +
+              'The expected test mapping is / → pension-aground-bullpen.ngrok-free.dev/activity/.'
+            : 'Discord reports that WinterBot Activities are NOT ENABLED. ' +
+              'In the Developer Portal, configure Activities → URL Mappings, ' +
+              'then turn on Activities → Settings → Enable Activities. ' +
+              'The /activitytest invitation works without this, but launching the Activity does not.',
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
       if (option === 'reset') {
         await store.transaction(data => { data.rounds = []; });
         await ensureRound();
