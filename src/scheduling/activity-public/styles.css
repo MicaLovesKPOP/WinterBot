@@ -441,3 +441,139 @@ button:hover:not(:disabled){filter:brightness(1.09)}
     width:220px;height:220px}
   .clock-hand-svg{width:220px;height:220px}
 }
+
+
+/* Availability editor polish: the overview remains visible while just the
+   time-window list scrolls, including within Discord's 460px iframe. */
+.week-mode-toggle{
+  display:grid;grid-template-columns:1fr 1fr;gap:3px;padding:3px;
+  margin-top:10px;border:1px solid var(--border);background:#151720;
+  border-radius:11px;width:100%;
+}
+.mode-button{
+  min-width:0;min-height:32px;padding:6px 8px;border:1px solid transparent;
+  border-radius:8px;background:transparent;color:var(--muted);
+  font-size:12px;font-weight:750;
+}
+.mode-button.active{
+  background:#38364e;border-color:#7570b0;color:#f0eeff;
+  box-shadow:0 2px 8px #0002;
+}
+.workspace>.day-editor{
+  display:flex;flex-direction:column;overflow:hidden;min-height:0;
+}
+.day-overview{flex:0 0 auto;min-height:0}
+.day-overview .time-visual{margin:9px 0 12px}
+.window-list{
+  flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;
+  scrollbar-width:thin;scrollbar-color:#515361 transparent;
+  overscroll-behavior:contain;
+  padding-right:2px;
+}
+.window-placeholder{
+  width:100%;min-height:72px;display:flex;align-items:center;justify-content:center;
+  gap:13px;padding:14px;text-align:left;border-radius:12px;
+  border:1px dashed #67677b;background:#252733;
+  color:var(--ink);font-size:13px;
+}
+.window-placeholder:not(:disabled):hover{
+  background:#303044;border-color:var(--brand);
+}
+.window-placeholder:disabled{opacity:.52}
+.window-placeholder strong,.window-placeholder small{display:block}
+.window-placeholder strong{font-size:13px;font-weight:770}
+.window-placeholder small{font-size:11px;margin-top:3px;color:var(--muted)}
+.placeholder-plus{
+  display:grid;place-items:center;flex-shrink:0;width:33px;height:33px;
+  border-radius:10px;background:rgba(152,150,255,.15);
+  border:1px solid #8582c6;color:#c7c5ff;font-size:25px;font-weight:400;
+}
+.range-tag{color:var(--good)}
+.range-tag.tentative{color:var(--warn)}
+.certainty-select.confirmed{color:var(--good)}
+.certainty-select.tentative{color:var(--warn)}
+.status-label.confirmed{color:var(--good)}
+.status-label.tentative{color:var(--warn)}
+.status-label.unavailable{color:var(--danger)}
+.status-label.empty{color:var(--muted)}
+.window-separator{color:var(--subtle)}
+.review-summary{display:grid;gap:6px;min-width:0;font-size:12px;line-height:1.3}
+.mini-time-bar{
+  display:block;position:relative;width:100%;height:8px;min-width:0;
+  border-radius:5px;overflow:hidden;background:#3a3d49;
+}
+.bar-segment{position:absolute;top:0;height:100%;min-width:1px}
+.bar-segment.confirmed{background:var(--good)}
+.bar-segment.tentative{
+  background:repeating-linear-gradient(45deg,#e5b463,#e5b463 5px,#a98246 5px,#a98246 9px);
+}
+.bar-segment.unavailable{background:#b65365}
+.preview-change .mini-time-bar{margin-top:5px}
+.preview-before,.preview-after{font-size:11px;line-height:1.4}
+.preview-before{opacity:.70}
+.preview-after{font-weight:700}
+.preview-change .status-label{font-weight:750}
+.clock-header-actions{display:flex;align-items:center;gap:7px;flex-shrink:0}
+.clock-format-setting{
+  display:inline-flex;align-items:center;gap:5px;
+  white-space:nowrap;color:var(--muted);font-size:11px;cursor:pointer;
+}
+.clock-format-setting input{width:14px;height:14px;accent-color:var(--brand);cursor:pointer}
+.clock-dialog .dialog-header h2{font-size:14px}
+.clock-number:disabled{
+  color:#777a89;opacity:.34;cursor:not-allowed;
+  background:transparent!important;box-shadow:none!important;
+}
+.clock-number.disabled:focus-visible{outline:1px solid #717484}
+.clock-hand[visibility="hidden"]{opacity:0}
+@media(max-height:620px){
+  .week-mode-toggle{margin-top:6px;padding:2px;border-radius:8px}
+  .mode-button{min-height:27px;font-size:10px;padding:4px 6px;border-radius:6px}
+  .workspace>.day-editor{overflow:hidden;padding:9px}
+  .day-overview .time-visual{margin:5px 0 6px}
+  .window-list .range-row{margin:5px 0}
+  .window-placeholder{min-height:53px;padding:8px 10px;gap:9px;border-radius:8px}
+  .window-placeholder strong{font-size:11px}
+  .window-placeholder small{font-size:10px}
+  .placeholder-plus{width:27px;height:27px;border-radius:8px;font-size:21px}
+  .review-row{min-height:49px;gap:8px}
+  .review-summary{gap:4px;font-size:11px}
+  .mini-time-bar{height:6px}
+  .hero{grid-template-columns:minmax(0,1fr) 195px;min-height:43px}
+  .progress-top strong{font-size:19px}
+  .progress-top strong span{font-size:13px}
+  .progress-top>span{font-size:10px}
+  .progress-track{height:5px;margin:4px 0}
+  .save-indicator{font-size:11px}
+}
+@media(max-height:620px) and (max-width:720px){
+  .hero{grid-template-columns:minmax(0,1fr) 125px;min-height:43px}
+  .progress-top strong{font-size:18px}
+  .progress-top strong span{font-size:12px}
+  .progress-top>span{display:block;font-size:8px}
+  .save-indicator{font-size:10px}
+  .week-mode-toggle{margin-top:4px}
+  .mode-button{min-height:25px;font-size:10px}
+  .window-placeholder{min-height:48px}
+  .review-row{min-height:51px}
+  .review-summary{font-size:10px}
+}
+@media(max-height:620px) and (max-width:390px){
+  .hero{grid-template-columns:minmax(0,1fr) 118px}
+  .progress-top>span{display:none}
+  .clock-dialog .dialog-header h2{font-size:13px}
+  .clock-format-setting{font-size:10px}
+}
+
+@media(max-height:620px) and (max-width:720px){
+  .week-section .section-title>div:first-child{width:auto}
+  .week-section .section-title{align-items:center}
+  .week-actions{align-self:center}
+  .day-overview .time-ticks{display:none}
+  .day-overview .time-visual{margin:5px 0 6px}
+  .hero{grid-template-columns:minmax(0,1fr) 138px}
+  .progress-top strong{font-size:21px}
+  .progress-top strong span{font-size:13px}
+  .progress-top>span{font-size:10px}
+  .progress-track{height:6px}
+}

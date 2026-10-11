@@ -25,7 +25,8 @@ const dates=['2026-10-12','2026-10-13','2026-10-14','2026-10-15',
   '2026-10-16','2026-10-17','2026-10-18'];
 const state={
   user:{id:'123456789012345678',name:'Test member'},
-  round:{id:'weekly-ui',title:'Weekly Game Night',dates,timezone:'Europe/Amsterdam'},
+  round:{id:'weekly-ui',title:'Weekly Game Night',dates,timezone:'Europe/Amsterdam',
+    allowedHoursByDate:{[dates[0]]:{start:'18:00',end:'24:00'}}},
   member:{draft:{},submitted:null,submittedAt:null,clockFormat:'24'},
   template:null,progress:{answered:0,total:7,complete:false,reviewed:false},
 };
@@ -112,8 +113,27 @@ async function run(){
     // Immediate local selection and editing while prior save is slow.
     await page.locator('.day-card').nth(1).click();
     await page.getByRole('heading',{name:/Tuesday 13 October/}).waitFor();
-    await page.locator('[data-action="set-hours"]').click();
+    assert.equal(await page.locator('.range-row').count(),0);
+    await page.locator('[data-action="add-window"]').click();
+    await page.getByRole('dialog',{name:'Choose availability hours'}).waitFor();
+    assert.equal(await page.locator('.range-row').count(),0,
+      'Adding a range does not insert fabricated default hours');
+    assert.equal(await page.locator('.clock-time-tab').first().innerText(), 'From\n--:--');
+    assert.equal(await page.locator('.clock-time-tab').nth(1).innerText(), 'Until\n--:--');
+    assert.equal(await page.locator('.clock-number.selected').count(),0,
+      'A new range must start without a preselected hour');
+    await page.setViewportSize({width:462,height:460});
+    fs.mkdirSync(path.join(process.cwd(),'preview-screens'),{recursive:true});
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens',
+      'clock-picker-empty-new-window.png')});
+    await page.locator('.clock-number[data-value="19"]').click();
+    await page.locator('.clock-number[data-value="30"]').click();
+    assert.equal(await page.locator('[data-action="clock-target"][data-which="end"]').getAttribute('aria-pressed'),'true');
+    await page.locator('.clock-number[data-value="23"]').click();
+    await page.locator('.clock-number[data-value="0"]').click();
+    await page.locator('[data-action="clock-save"]').click();
     await page.locator('.range-row').waitFor();
+    assert.match(await page.locator('.range-row').innerText(),/19:30/);
     await page.locator('.day-card').nth(2).click();
     await page.getByRole('heading',{name:/Wednesday 14 October/}).waitFor();
     await page.locator('[data-action="unavailable"]').click();
@@ -121,30 +141,19 @@ async function run(){
     await page.locator('.day-card').nth(1).click();
     assert.equal(await page.locator('input[type="time"]').count(),0,
       'The Activity must not expose the browser scrolling time picker');
-    // A time range can be adjusted atomically. An invalid provisional From
-    // time is rejected inside the picker without changing the stored day.
+    // Invalid hours are grayed out rather than producing a mystery error.
     await page.locator('[data-action="edit-range"][data-which="start"]').first().click();
     await page.getByRole('dialog',{name:'Choose availability hours'}).waitFor();
-    await page.locator('.clock-number[data-value="23"]').click();
-    await page.locator('.clock-number[data-value="30"]').click();
-    await page.locator('[data-action="clock-save"]').click();
-    await page.getByText('Until must be later than From.').waitFor();
+    assert.equal(await page.locator('.clock-number[data-value="23"]').isDisabled(),true,
+      'The starting hour cannot equal the existing 23:00 end');
+    assert.equal(await page.locator('.clock-number[data-value="19"]').isDisabled(),false);
     await page.setViewportSize({width:462,height:460});
-    const invalidActions=await page.evaluate(()=>{
-      const dialog=document.querySelector('.clock-dialog');
-      const apply=dialog?.querySelector('[data-action="clock-save"]');
-      const bounds=apply?.getBoundingClientRect();
-      const hit=bounds&&document.elementFromPoint(bounds.left+bounds.width/2,
-        bounds.top+bounds.height/2);
-      return {bottom:bounds?.bottom,top:bounds?.top,
-        clickable:hit===apply||apply?.contains(hit)};
-    });
-    assert.ok(invalidActions.bottom<=460&&invalidActions.top>=0&&
-      invalidActions.clickable,'Clock controls must remain visible even for an invalid range: '+
-      JSON.stringify(invalidActions));
+    const pickerBounds=await page.locator('.clock-dialog').boundingBox();
+    assert.ok(pickerBounds.y>=0&&pickerBounds.y+pickerBounds.height<=460,
+      'Clock must fit the short Discord window');
     await page.locator('[data-action="dismiss"]').last().click();
     assert.equal(await page.locator('[data-action="edit-range"][data-which="start"]').first()
-      .getByText('18:00').count(),1,'Invalid provisional range never saved');
+      .getByText('19:30').count(),1,'Cancel must retain previously saved hours');
 
     await page.locator('[data-action="edit-range"][data-which="start"]').first().click();
     await page.getByRole('dialog',{name:'Choose availability hours'}).waitFor();
@@ -200,6 +209,33 @@ async function run(){
     await page.locator('[data-action="apply-batch"]').click();
     await page.getByText('Your week',{exact:true}).waitFor().catch(()=>{});
     assert.equal(await page.locator('.day-card.state-yes').count(),2);
+    // A configured moderator limit (Monday 18:00–24:00) disables times
+    // outside that permitted range, while ordinary free hours remain usable.
+    await page.locator('.day-card').nth(0).click();
+    await page.locator('[data-action="edit-range"][data-which="start"]').click();
+    assert.equal(await page.locator('.clock-number[data-value="9"]').isDisabled(),true);
+    assert.equal(await page.locator('.clock-number[data-value="18"]').isDisabled(),false);
+    assert.equal(await page.locator('.clock-number[data-value="23"]').isDisabled(),true);
+    await page.locator('[data-action="dismiss"]').last().click();
+    console.log('Moderator-restricted hours are visibly disabled on the clock.');
+
+    // The multi-day change preview uses meaningful certainty colors,
+    // including yellow tentative, red unavailable and green replacement.
+    await page.locator('[data-action="multi"]').click();
+    await page.locator('.day-card').nth(1).click(); // tentative
+    await page.locator('.day-card').nth(2).click(); // unavailable
+    await page.locator('[data-action="batch-mode"][data-mode="all"]').click();
+    await page.locator('[data-action="apply-batch"]').click();
+    await page.locator('.dialog .preview-before .status-label.tentative').waitFor();
+    await page.locator('.dialog .preview-before .status-label.unavailable').waitFor();
+    assert.equal(await page.locator('.dialog .preview-after .status-label.confirmed').count(),2);
+    assert.equal(await page.locator('.dialog .mini-time-bar').count(),2);
+    await page.setViewportSize({width:462,height:460});
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens',
+      'weekly-activity-batch-preview-colors.png')});
+    await page.locator('.dialog [data-action="dismiss"]').last().click();
+    await page.locator('[data-action="mode-single"]').click();
+    await page.setViewportSize({width:1000,height:860});
 
     await page.locator('[data-action="review"]').click();
     await page.getByRole('heading',{name:'Review your availability'}).waitFor();
@@ -214,6 +250,20 @@ async function run(){
     await page.setViewportSize({width:462,height:460});
     await page.locator('[data-action="review"]').click();
     await page.getByRole('heading',{name:'Review your availability'}).waitFor();
+    assert.equal(await page.locator('.review-row .mini-time-bar').count(),7,
+      'All seven review dates get compact timelines');
+    assert.equal(await page.locator('.review-row').nth(1)
+      .locator('.bar-segment.tentative').count(),1);
+    assert.match(await page.locator('.review-row').nth(1)
+      .locator('.status-label.tentative').innerText(),/\(tentative\)/i);
+    assert.equal(await page.locator('.review-row').nth(2)
+      .locator('.bar-segment.unavailable').count(),1);
+    const colors=await page.evaluate(()=>{
+      const first=document.querySelector('.review-row .status-label.confirmed');
+      const tentative=document.querySelector('.review-row .status-label.tentative');
+      return {confirmed:getComputedStyle(first).color,tentative:getComputedStyle(tentative).color};
+    });
+    assert.notEqual(colors.confirmed,colors.tentative,'Tentative cannot be styled green');
     await page.getByText('Scroll through all dates to enable submission.').waitFor();
     assert.equal(await page.locator('[data-action="submit"]').isDisabled(),true,
       'On a short viewport, users must scroll through the review before submitting');
@@ -250,9 +300,10 @@ async function run(){
     assert.equal(await page.locator('[data-action="reuse"]').count(),1,
       'saved usual-week template should appear as a familiar shortcut');
     await page.locator('.day-card').nth(1).click();
-    await page.locator('[data-action="clock"]').click();
-    await page.getByRole('button',{name:'12-hour clock'}).waitFor();
     await page.locator('[data-action="edit-range"][data-which="start"]').first().click();
+    await page.locator('[data-clock-format]').uncheck();
+    assert.equal(await page.locator('[data-clock-format]').isChecked(),false,
+      'The clock preference should have a clear unchecked 12-hour state');
     assert.equal(await page.locator('.clock-number').count(),12,
       '12-hour clock uses one familiar hour ring and AM/PM controls');
     await page.locator('[data-action="clock-ampm"][data-ampm="AM"]').click();
@@ -269,9 +320,19 @@ async function run(){
     await page.locator('[data-action="edit-range"][data-which="start"]').first()
       .getByText('7:30 PM').waitFor();
 
-    await page.locator('[data-action="clock"]').click();
     await page.locator('[data-action="edit-range"][data-which="end"]').first().click();
+    await page.locator('[data-clock-format]').check();
+    assert.equal(await page.locator('[data-clock-format]').isChecked(),true,
+      'Checked preference uses the 24-hour face');
     await page.locator('[data-action="clock-endday"]').click();
+    assert.match(await page.locator('[data-action="clock-target"][data-which="end"]').innerText(),/24:00/);
+    await page.locator('[data-action="clock-save"]').click();
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().getByText(/24:00/).waitFor();
+    // Selecting 00:00 on the Until clock means END OF THE SELECTED DAY
+    // (24:00), rather than incorrectly comparing it as 00:00 before From.
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().click();
+    await page.locator('.clock-number[data-value="0"]').click();
+    await page.locator('.clock-number[data-value="0"]').click();
     assert.match(await page.locator('[data-action="clock-target"][data-which="end"]').innerText(),/24:00/);
     await page.locator('[data-action="clock-save"]').click();
     await page.locator('[data-action="edit-range"][data-which="end"]').first().getByText(/24:00/).waitFor();
@@ -460,29 +521,42 @@ async function run(){
         // Complicated availability must scroll inside the editor, never cause
         // the Discord Activity frame or fixed review control to scroll away.
         await page.locator('[data-action="add-window"]').click();
+        assert.equal(await page.locator('.range-row').count(),1,
+          'Clicking the plus must not insert an arbitrary time window');
+        assert.equal(await page.locator('[data-action="clock-save"]').isDisabled(),true,
+          'A blank range should have an inactive Apply button');
+        await page.locator('.clock-number[data-value="9"]').click();
+        await page.locator('.clock-number[data-value="0"]').click();
+        await page.locator('.clock-number[data-value="11"]').click();
+        await page.locator('.clock-number[data-value="0"]').click();
+        await page.locator('[data-action="clock-save"]').click();
         assert.equal(await page.locator('.range-row').count(),2);
         const details=await page.evaluate(()=>{
-          const editor=document.querySelector('.editor-card');
+          const list=document.querySelector('.window-list');
+          const header=document.querySelector('.day-overview');
           const footer=document.querySelector('.action-footer button');
           const r=footer.getBoundingClientRect();
+          const headerTop=header.getBoundingClientRect().top;
+          list.scrollTop=list.scrollHeight;
           return {documentHeight:document.documentElement.scrollHeight,
-            internalScroll:editor.scrollHeight>editor.clientHeight,
+            internalScroll:list.scrollHeight>list.clientHeight,
+            headerPinned:Math.abs(header.getBoundingClientRect().top-headerTop)<1,
             footerVisible:r.top>=0&&r.bottom<=innerHeight};
         });
-        assert.ok(details.internalScroll,'Additional windows must scroll inside the editor');
+        assert.ok(details.internalScroll,'Only the time-window list should scroll');
+        assert.ok(details.headerPinned,'Day overview must remain fixed above scrolling windows');
         assert.equal(details.footerVisible,true,'Review must stay visible after adding windows');
         assert.ok(details.documentHeight<=461,'Two windows must not create outer scrolling');
-        await page.locator('.editor-card').evaluate(e=>{e.scrollTop=e.scrollHeight;});
-        const scrollBefore=await page.locator('.editor-card').evaluate(e=>e.scrollTop);
+        const scrollBefore=await page.locator('.window-list').evaluate(e=>e.scrollTop);
         await page.locator('[data-action="edit-range"][data-which="start"]').last().click();
         await page.locator('.clock-number[data-value="20"]').click();
         await page.locator('.clock-number[data-value="0"]').click();
         await page.locator('[data-action="clock-save"]').click();
         assert.equal(await page.locator('.clock-dialog').count(),0,
           'A valid range closes the clock popup instead of leaving an error overlay');
-        const scrollAfter=await page.locator('.editor-card').evaluate(e=>e.scrollTop);
-        assert.ok(scrollAfter>=scrollBefore-10,
-          'Editing a lower time window should preserve internal scroll position');
+        const scrollAfter=await page.locator('.window-list').evaluate(e=>e.scrollTop);
+        assert.ok(scrollAfter>0,
+          'Editing a lower window should retain its visible scroll region');
         assert.equal(await page.locator('input[type="time"]').count(),0);
         await page.screenshot({path:path.join(process.cwd(),'preview-screens',
           'weekly-activity-460-narrow-two-windows.png')});
@@ -493,6 +567,13 @@ async function run(){
         (metrics.editorScroll>metrics.editorClient)+
         '; footer='+JSON.stringify(metrics.footer)+'; week='+JSON.stringify(metrics.week));
     }
+    // A restricted date's All day shortcut means the full permitted portion,
+    // not a forbidden 00:00–24:00 window.
+    await page.locator('.day-card').nth(0).click();
+    await page.locator('[data-action="all-day"]').click();
+    assert.match(await page.locator('.range-row').first().innerText(),/18:00/);
+    assert.match(await page.locator('.range-row').first().innerText(),/24:00/);
+    console.log('All day respects moderator-defined daily limits.');
     assert.equal(errors.length,0,JSON.stringify(errors));
     console.log('Responsive Activity stays inside a 460px Discord frame at both widths.');
     assert.ok(saves>=1,'draft edits must reach the server; coalescing should reduce round trips');

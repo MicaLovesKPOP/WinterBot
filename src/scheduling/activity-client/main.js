@@ -7,7 +7,7 @@ let model=null;
 let selectedDay=null;
 let multi=false;
 let chosen=new Set();
-let batch={kind:'confirmed',start:'18:00',end:'23:00',mode:'hours'};
+let batch={kind:'confirmed',start:null,end:null,mode:'hours'};
 let view='week';
 let popup=null;
 let notice='';
@@ -76,13 +76,21 @@ function validateDay(raw){
 function allDay(kind='confirmed'){
   return {status:'available',windows:[{kind,start:'00:00',end:'24:00',maxMinutes:null}]};
 }
+function allPermittedDay(date,kind='confirmed'){
+  const limits=model?.round?.allowedHoursByDate?.[date];
+  if(!limits)return allDay(kind);
+  const ranges=Array.isArray(limits)?limits:[limits];
+  return validateDay({status:'available',windows:ranges.map(w=>({
+    start:w.start,end:w.end,kind,maxMinutes:null,
+  }))});
+}
 function summary(day){
   if(!day)return 'Not answered';
   if(day.status==='unavailable')return 'Unavailable';
   return day.windows.map(w=>{
     const duration=w.start==='00:00'&&w.end==='24:00'?'All day':
       formatTime(w.start)+'–'+formatTime(w.end);
-    return (w.kind==='tentative'?'Tentative · ':'')+duration+
+    return duration+(w.kind==='tentative'?' (tentative)':'')+
       (w.maxMinutes?' · max '+w.maxMinutes+'m':'');
   }).join('  ·  ');
 }
@@ -112,9 +120,9 @@ function changeDay(date,day,renderNow=true){
   scheduleSave();
   if(renderNow)render();
 }
-function changeMany(dates,day){
-  const normalized=validateDay(day);
-  for(const date of dates){
+function changeDays(changes){
+  for(const {date,day} of changes){
+    const normalized=validateDay(day);
     if(normalized)model.member.draft[date]=copy(normalized);
     else delete model.member.draft[date];
     dirty.set(date,normalized?{date,...copy(normalized)}:{date,status:'unanswered'});
@@ -123,6 +131,9 @@ function changeMany(dates,day){
   errorSaving=false;
   scheduleSave();
   render();
+}
+function changeMany(dates,day){
+  changeDays(dates.map(date=>({date,day})));
 }
 function stageHeader(){
   const dates=model.round.dates;
@@ -166,14 +177,53 @@ function weekCard(){
   return '<section class="week-section" aria-label="Weekly dates">'+
     '<div class="section-title"><div><p class="eyebrow">STEP 1</p><h2>Your week</h2></div>'+
     '<div class="week-actions">'+
-    (model.template?makeButton('Reuse','reuse','minor','title="Apply your saved usual week" aria-label="Reuse usual week"'):'')+
-    makeButton(preferenceClock==='24'?'24h':'12h','clock','minor',
-      'aria-label="'+(preferenceClock==='24'?'24-hour clock':'12-hour clock')+'"')+
-    '<button class="text-button'+(multi?' active':'')+'" data-action="multi" type="button">'+
-    (multi?'✓ Selecting':'Select days')+'</button></div></div>'+
+    (model.template?makeButton('Reuse','reuse','minor',
+      'title="Apply your usual week" aria-label="Reuse usual week"'):'')+
+    '</div></div>'+
     '<div class="week-grid">'+dayCards()+'</div>'+
-    (multi?'<p class="small-note">'+chosen.size+' day(s) selected. Pick the days you want to edit together.</p>':'')+
+    '<div class="week-mode-toggle" role="group" aria-label="Availability editing mode">'+
+    '<button type="button" data-action="mode-single" aria-pressed="'+!multi+'"'+
+    ' class="mode-button'+(!multi?' active':'')+'">Single day</button>'+
+    '<button type="button" data-action="multi" aria-pressed="'+multi+'"'+
+    ' class="mode-button'+(multi?' active':'')+'">Multiple days'+
+    (multi&&chosen.size?' ('+chosen.size+')':'')+'</button></div>'+
     '</section>';
+}
+function intervalIntersection(a,b){
+  const result=[];
+  for(const [as,ae] of a)for(const [bs,be] of b){
+    const start=Math.max(as,bs),end=Math.min(ae,be);
+    if(end-start>=5)result.push([start,end]);
+  }
+  return result;
+}
+function freeClockIntervals(spec) {
+  const dates=spec.source==='batch'?model.round.dates.filter(d=>chosen.has(d)):[spec.date];
+  let shared=[[0,1440]];
+  for(const date of dates) {
+    const restriction=model.round.allowedHoursByDate?.[date];
+    const permitted=(Array.isArray(restriction)?restriction:
+      restriction?[restriction]:[{start:'00:00',end:'24:00'}])
+      .map(w=>[minutes(w.start),minutes(w.end)])
+      .filter(([a,b])=>Number.isFinite(a)&&Number.isFinite(b)&&b-a>=5);
+    let ranges=permitted;
+    const entry=dayEntry(date);
+    if(spec.source!=='batch'&&entry?.status==='available'){
+      entry.windows.forEach((w,i)=>{
+        if(spec.source==='single'&&i===spec.index)return;
+        const busyStart=minutes(w.start),busyEnd=minutes(w.end);
+        ranges=ranges.flatMap(([a,b])=>{
+          if(b<=busyStart||a>=busyEnd)return [[a,b]];
+          const free=[];
+          if(busyStart-a>=5)free.push([a,busyStart]);
+          if(b-busyEnd>=5)free.push([busyEnd,b]);
+          return free;
+        });
+      });
+    }
+    shared=intervalIntersection(shared,ranges);
+  }
+  return shared;
 }
 function timeRail(windows){
   const ticks=[0,6,12,18,24].map(h=>
@@ -187,9 +237,34 @@ function timeRail(windows){
   return '<div class="time-visual" aria-label="Visual timeline for the selected day">'+
     '<div class="time-track">'+segments+'</div><div class="time-ticks">'+ticks+'</div></div>';
 }
+function statusText(day) {
+  if(!day)return '<span class="status-label empty">Not answered</span>';
+  if(day.status==='unavailable')return '<span class="status-label unavailable">Unavailable</span>';
+  return day.windows.map(w=>{
+    const all=w.start==='00:00'&&w.end==='24:00';
+    const time=all?'All day':formatTime(w.start)+'–'+formatTime(w.end);
+    return '<span class="status-label '+(w.kind==='tentative'?'tentative':'confirmed')+'">'+
+      esc(time)+(w.kind==='tentative'?' (tentative)':'')+
+      (w.maxMinutes?' · max '+w.maxMinutes+'m':'')+'</span>';
+  }).join('<span class="window-separator">, </span>');
+}
+function miniTimeBar(day){
+  let segments='';
+  if(day?.status==='unavailable')segments='<span class="bar-segment unavailable" style="left:0;width:100%"></span>';
+  else if(day?.status==='available')segments=day.windows.map(w=>{
+    const a=minutes(w.start),b=minutes(w.end);
+    return '<span class="bar-segment '+w.kind+'" style="left:'+(a/1440*100)+
+      '%;width:'+((b-a)/1440*100)+'%" title="'+esc(summary({status:'available',windows:[w]}))+'"></span>';
+  }).join('');
+  return '<div class="mini-time-bar" role="img" aria-label="'+
+    esc(summary(day))+ '">'+segments+'</div>';
+}
+function statusWithBar(day){
+  return '<div class="review-summary">'+statusText(day)+miniTimeBar(day)+'</div>';
+}
 function timeInput(date,index,field,value){
   const label=field==='start'?'From':'Until';
-  const shown=value==='24:00'?
+  const shown=value==null?'Choose time':value==='24:00'?
     (preferenceClock==='12'?'12:00 AM · End':'24:00 · End'):formatTime(value);
   return '<button type="button" class="clock-trigger" data-action="edit-range"'+
     ' data-index="'+index+'" data-which="'+field+'"'+
@@ -222,6 +297,13 @@ function windowEditor(date,day,index,w){
     '<div class="field"><label>Max. stay</label><select data-date="'+date+'" data-index="'+index+
     '" data-field="maxMinutes">'+durationOptions(w.maxMinutes)+'</select></div></div></article>';
 }
+function addWindowPlaceholder(first=false,disabled=false){
+  return '<button type="button" data-action="add-window" class="window-placeholder"'+
+    (disabled?' disabled':'')+'><span class="placeholder-plus" aria-hidden="true">+</span>'+
+    '<span><strong>'+(first?'Add availability':'Add another time window')+'</strong>'+
+    '<small>'+(disabled?'No unused permitted hours remain':
+      'Choose From and Until on the clock')+'</small></span></button>';
+}
 function singleEditor(){
   const date=selectedDay||model.round.dates[0],entry=dayEntry(date);
   const kind=entry?.status==='available'?'hours':entry?.status==='unavailable'?'off':'none';
@@ -231,25 +313,25 @@ function singleEditor(){
   const title='<div class="editor-heading"><div><p class="eyebrow">STEP 2 · EDIT DAY</p><h2>'+
     esc(datestring(date))+'</h2></div><span class="pill '+dayKind(entry)+'">'+
     esc(badge)+'</span></div>';
-  let body='<div class="choice-row">'+
-    makeButton('Available hours','set-hours','choice '+(kind==='hours'?'selected':'soft'))+
-    makeButton('All day','all-day','choice')+
-    makeButton('Unavailable','unavailable','choice '+(kind==='off'?'selected':'soft'))+
-    '</div>';
-  if(entry?.status==='available'){
-    body+='<p class="hint">Green ranges are available. Mark a range tentative if you might be able to attend.</p>'+
-      timeRail(entry.windows)+entry.windows.map((w,i)=>windowEditor(date,entry,i,w)).join('')+
-      '<div class="editor-footer">'+makeButton('+ Add time window','add-window','outline')+
-      makeButton('Copy this day','copy','outline')+'</div>';
-  }else if(kind==='off'){
-    body+='<div class="empty-editor"><strong>You are unavailable on this day.</strong>'+
-      '<p>Change this anytime before submitting.</p>'+
-      makeButton('Clear answer','clear-day','minor')+'</div>';
-  }else{
-    body+='<div class="empty-editor"><strong>No hours entered yet.</strong>'+
-      '<p>Choose Available hours, All day or Unavailable above. An unanswered day cannot be submitted.</p></div>';
-  }
-  return '<section class="editor-card">'+title+body+'</section>';
+  const buttons='<div class="choice-row">'+
+    makeButton('All day','all-day','choice'+(entry?.status==='available'&&
+      entry.windows.length===1&&entry.windows[0].start==='00:00'&&
+      entry.windows[0].end==='24:00'?' selected':''))+
+    makeButton('Unavailable','unavailable','choice'+(kind==='off'?' selected':''))+
+    (entry?makeButton('Clear answer','clear-day','minor'):'')+'</div>';
+  const header='<div class="day-overview">'+title+buttons+
+    (entry?.status==='available'?timeRail(entry.windows):'')+'</div>';
+  const canAdd=freeClockIntervals({source:'new',date,index:-2}).some(([a,b])=>b-a>=5);
+  let windows='';
+  if(entry?.status==='available')
+    windows=entry.windows.map((w,i)=>windowEditor(date,entry,i,w)).join('')+
+      addWindowPlaceholder(false,!canAdd)+
+      '<div class="editor-footer">'+makeButton('Copy this day','copy','outline')+'</div>';
+  else windows=addWindowPlaceholder(true,!canAdd)+
+    (kind==='off'?'<p class="hint">Adding hours will replace Unavailable for this day.</p>':
+      '<p class="hint">Nothing is saved until you choose and apply a range.</p>');
+  return '<section class="editor-card day-editor">'+header+
+    '<div class="window-list">'+windows+'</div></section>';
 }
 function batchEditor(){
   const dates=model.round.dates.filter(d=>chosen.has(d));
@@ -268,12 +350,13 @@ function batchEditor(){
       timeInput(null,-1,'start',batch.start)+'</div>'+
       '<div class="field"><label>Until</label>'+
       timeInput(null,-1,'end',batch.end)+
-      '</div><div class="field"><label>Certainty</label><select data-batch="kind">'+
+      '</div><div class="field"><label>Certainty</label><select data-batch="kind"'+
+      ' class="certainty-select '+batch.kind+'">'+
       '<option value="confirmed"'+(batch.kind==='confirmed'?' selected':'')+'>Available</option>'+
       '<option value="tentative"'+(batch.kind==='tentative'?' selected':'')+'>Tentative</option>'+
       '</select></div></div>':'')+
     '<div class="editor-footer">'+makeButton('Apply to '+dates.length+' day(s)','apply-batch','primary',
-      ready?'':'disabled')+'</div>';
+      ready&&(batch.mode!=='hours'||(batch.start&&batch.end))?'':'disabled')+'</div>';
   return '<section class="editor-card">'+body+'</section>';
 }
 
@@ -284,7 +367,7 @@ function reviewPage(){
     const answer=dayEntry(d),kind=dayKind(answer);
     return '<div class="review-row"><div class="review-date"><span class="status-dot '+kind+'"></span>'+
       '<strong>'+esc(datestring(d,'mini'))+'</strong></div>'+
-      '<div class="review-answer '+kind+'">'+esc(summary(answer))+'</div>'+
+      statusWithBar(answer)+
       makeButton('Edit','review-edit','minor','data-date="'+d+'"')+'</div>';
   }).join('');
   return '<section class="review-card"><div class="section-title">'+
@@ -313,8 +396,47 @@ function facePoint(value,radius) {
   const angle=2*Math.PI*value/12-Math.PI/2;
   return {x:110+radius*Math.cos(angle),y:110+radius*Math.sin(angle)};
 }
+function eligibleClockMinute(p,t) {
+  const endpoint=p.which;
+  if(!Number.isFinite(t))return false;
+  if(!p.allowed.some(([a,b])=>endpoint==='start'?
+      (t>=a&&t+5<=b):(t>=a+5&&t<=b)))return false;
+  const other=endpoint==='end'?'start':'end';
+  if(p.touched[other].hour&&p.touched[other].minute&&p[other]){
+    const otherMinute=minutes(p[other]);
+    if(endpoint==='end'&&t<=otherMinute)return false;
+    if(endpoint==='start'&&t>=otherMinute)return false;
+    if(!p.allowed.some(([a,b])=>endpoint==='start'?
+        (t>=a&&otherMinute<=b&&otherMinute>t):
+        (otherMinute>=a&&t<=b&&t>otherMinute)))return false;
+  }
+  return true;
+}
+function clockOptionAvailable(p,value) {
+  const which=p.which;
+  const current=p[which]==='24:00'?'00:00':p[which]||'00:00';
+  const existingHour=Number(current.slice(0,2));
+  const hour=p.stage==='hour'?
+    (preferenceClock==='24'?value:(value%12)+(p.period[which]==='PM'?12:0)):
+    existingHour;
+  const candidates=p.stage==='hour'?Array.from({length:12},(_,i)=>i*5):[value];
+  return candidates.some(m=>{
+    const t=which==='end'&&hour===0&&m===0?1440:hour*60+m;
+    return eligibleClockMinute(p,t);
+  });
+}
+function clockHeading(p,which){
+  const raw=p[which],parts=p.touched[which];
+  if(!parts.hour||!raw)return '--:--';
+  if(raw==='24:00')return preferenceClock==='12'?'12:00 AM':'24:00';
+  const hh=Number(raw.slice(0,2));
+  if(!parts.minute)return preferenceClock==='24'?
+    String(hh).padStart(2,'0')+':--':
+    String(hh%12||12)+':-- '+p.period[which];
+  return formatTime(raw);
+}
 function dialFace(p) {
-  const time=p[p.which]==='24:00'?'23:00':p[p.which];
+  const time=p[p.which]==='24:00'?'00:00':p[p.which]||'00:00';
   const hour=Number(time.slice(0,2)),minute=Number(time.slice(3));
   const isHours=p.stage==='hour';
   let options;
@@ -340,40 +462,52 @@ function dialFace(p) {
       selected:(hour%12||12)===(i||12),
     }));
   }
+  options=options.map(o=>({...o,
+    selected:p.touched[p.which][p.stage]&&o.selected,
+    disabled:!clockOptionAvailable(p,o.value),
+  }));
   const active=options.find(x=>x.selected);
-  const point=active?facePoint(active.position,active.radius):{x:110,y:22};
+  const point=active?facePoint(active.position,active.radius):{x:110,y:110};
   return '<div class="clock-face" role="group" aria-label="'+
     (isHours?'Choose an hour':'Choose minutes in five-minute steps')+'">'+
     '<svg viewBox="0 0 220 220" aria-hidden="true" class="clock-hand-svg">'+
     (isHours&&preferenceClock==='24'?'<circle cx="110" cy="110" r="56" class="clock-inner-ring"/>':'')+
     '<line x1="110" y1="110" x2="'+point.x.toFixed(1)+'" y2="'+point.y.toFixed(1)+
-    '" class="clock-hand"/><circle cx="110" cy="110" r="4" class="clock-hub"/></svg>'+
+    '" class="clock-hand"'+(!active?' visibility="hidden"':'')+
+    '/><circle cx="110" cy="110" r="4" class="clock-hub"/></svg>'+
     options.map(option=>{
       const pos=facePoint(option.position,option.radius);
       return '<button type="button" data-action="clock-choice" data-value="'+option.value+
         '" class="clock-number'+(option.inner?' inner':'')+(option.selected?' selected':'')+
+        (option.disabled?' disabled':'')+
         '" style="left:'+pos.x.toFixed(1)+'px;top:'+pos.y.toFixed(1)+'px"'+
-        ' aria-label="'+(isHours?'Hour '+option.label:'Minute '+option.label)+'"'+
-        ' aria-pressed="'+option.selected+'">'+option.label+'</button>';
+        ' aria-label="'+(isHours?'Hour '+option.label:'Minute '+option.label)+
+        (option.disabled?' unavailable':'')+'"'+
+        ' aria-pressed="'+option.selected+'"'+(option.disabled?' disabled':'')+
+        '>'+option.label+'</button>';
     }).join('')+'</div>';
 }
 function clockPopupHtml(p) {
-  const format=value=>value==='24:00'?
-    (preferenceClock==='12'?'12:00 AM':'24:00'):formatTime(value);
-  const current=p[p.which]==='24:00'?'23:00':p[p.which];
   const is12=preferenceClock==='12';
-  const ampm=Number(current.slice(0,2))<12?'AM':'PM';
+  const ampm=p.period[p.which];
+  const ready=Boolean(p.start&&p.end&&
+    p.touched.start.hour&&p.touched.start.minute&&
+    p.touched.end.hour&&p.touched.end.minute&&
+    minutes(p.end)>minutes(p.start)&&
+    p.allowed.some(([a,b])=>minutes(p.start)>=a&&minutes(p.end)<=b));
   return '<div class="overlay clock-overlay" data-action="dismiss-overlay">'+
     '<section class="dialog clock-dialog" role="dialog" aria-modal="true" aria-label="Choose availability hours">'+
-    '<div class="dialog-header"><h2>Choose availability hours</h2>'+
-    makeButton('×','dismiss','icon-button','aria-label="Close clock picker"')+'</div>'+
+    '<div class="dialog-header"><h2>Choose hours</h2><div class="clock-header-actions">'+
+    '<label class="clock-format-setting"><input type="checkbox" data-clock-format'+
+    (preferenceClock==='24'?' checked':'')+'><span>24-hour clock</span></label>'+
+    makeButton('×','dismiss','icon-button','aria-label="Close clock picker"')+'</div></div>'+
     '<div class="clock-range-tabs" role="group" aria-label="Range endpoints">'+
     ['start','end'].map(which=>
       '<button type="button" class="clock-time-tab'+(p.which===which?' active':'')+
       '" data-action="clock-target" data-which="'+which+'"'+
       ' aria-pressed="'+(p.which===which)+'"><span>'+
       (which==='start'?'From':p.end==='24:00'?'Until · end of day':'Until')+
-      '</span><strong>'+esc(format(p[which]))+
+      '</span><strong>'+esc(clockHeading(p,which))+
       '</strong></button>').join('')+'</div>'+
     '<div class="clock-toolbar"><div class="clock-stages" role="group" aria-label="Choose hour or minute">'+
     makeButton('Hours','clock-stage',p.stage==='hour'?'active':'','data-stage="hour"')+
@@ -381,7 +515,7 @@ function clockPopupHtml(p) {
     (is12?'<div class="clock-ampm" role="group" aria-label="AM or PM">'+
       makeButton('AM','clock-ampm',ampm==='AM'?'active':'','data-ampm="AM"')+
       makeButton('PM','clock-ampm',ampm==='PM'?'active':'','data-ampm="PM"')+'</div>':
-      '<span class="clock-hint">24-hour clock</span>')+'</div>'+
+      '<span class="clock-hint">Drag or tap the dial</span>')+'</div>'+
     dialFace(p)+
     '<div class="clock-bottom-line">'+
     '<span>'+(p.completed?'Range chosen · Apply when ready':
@@ -389,12 +523,13 @@ function clockPopupHtml(p) {
       'Drag · 01–12 outer, 13–00 inner':
       p.stage==='hour'?'Drag or tap an hour':'Drag or tap minutes · 5-minute steps')+'</span>'+
     (p.which==='end'?makeButton('End of day','clock-endday',
-      p.end==='24:00'?'selected':'','title="Set the end to 24:00"'):'')+
+      p.end==='24:00'?'selected':'','title="Set the end to 24:00"'+
+      (!eligibleClockMinute(p,1440)?' disabled':'')):'')+
     '</div>'+
     (p.error?'<p class="clock-error" role="alert">'+esc(p.error)+'</p>':'')+
     '<div class="bottom-actions clock-actions">'+
     makeButton('Cancel','dismiss','outline')+
-    makeButton('Apply range','clock-save','primary')+
+    makeButton('Apply range','clock-save','primary',ready?'':'disabled')+
     '</div></section></div>';
 }
 function redrawClockOnly() {
@@ -403,24 +538,41 @@ function redrawClockOnly() {
 }
 function openClockPicker(element) {
   const index=Number(element.dataset.index);
-  const source=index===-1?batch:dayEntry(selectedDay)?.windows?.[index];
+  const sourceName=index===-1?'batch':index===-2?'new':'single';
+  const source=sourceName==='batch'?batch:
+    sourceName==='new'?{start:null,end:null}:
+      dayEntry(selectedDay)?.windows?.[index];
   if(!source)throw Error('Select an available time window first.');
+  const date=selectedDay;
+  const spec={source:sourceName,date,index};
+  const allowed=freeClockIntervals(spec);
+  if(!allowed.length)throw Error('No unused hours remain inside this day’s allowed schedule.');
+  const parts=value=>({hour:value!=null,minute:value!=null});
+  const period=value=>value==null?'PM':Number(value.slice(0,2))>=12?'PM':'AM';
   popup={
-    type:'clock',source:index===-1?'batch':'single',date:selectedDay,index,
-    start:source.start,end:source.end,which:element.dataset.which,
-    stage:'hour',error:'',
+    type:'clock',source:sourceName,date,index,
+    start:source.start??null,end:source.end??null,
+    touched:{start:parts(source.start),end:parts(source.end)},
+    period:{start:period(source.start),end:period(source.end)},
+    allowed,which:element.dataset.which||'start',
+    stage:'hour',error:'',completed:false,
   };
   render();
 }
 function setClockDialValue(p,value) {
-  const current=p[p.which]==='24:00'?'23:00':p[p.which];
+  if(!clockOptionAvailable(p,value))return false;
+  const current=p[p.which]==='24:00'?'00:00':p[p.which]||'00:00';
   let hour=Number(current.slice(0,2)),minute=Number(current.slice(3));
-  if(p.stage==='hour')
-    hour=preferenceClock==='24'?value:(value%12)+(hour>=12?12:0);
-  else minute=value;
-  p[p.which]=clock(hour*60+minute);
+  if(p.stage==='hour'){
+    hour=preferenceClock==='24'?value:(value%12)+(p.period[p.which]==='PM'?12:0);
+    p.period[p.which]=hour>=12?'PM':'AM';
+  }else minute=value;
+  p.touched[p.which][p.stage]=true;
+  p[p.which]=p.which==='end'&&hour===0&&minute===0&&
+    p.touched[p.which].minute?'24:00':clock(hour*60+minute);
   p.completed=false;
   p.error='';
+  return true;
 }
 function advanceClockStep(p) {
   // A complete range takes four choices, without manual tab switching.
@@ -442,8 +594,7 @@ function completeClockChoice() {
 }
 function chooseOnClock(value) {
   if(!popup||popup.type!=='clock')return;
-  setClockDialValue(popup,value);
-  completeClockChoice();
+  if(setClockDialValue(popup,value))completeClockChoice();
 }
 // Pointer capture makes the dial behave like a native clock: you can hold
 // the mouse/touch down and sweep across numbers until you release. While
@@ -466,26 +617,28 @@ function clockValueAtPointer(face,event) {
 function updateClockPreview() {
   const p=popup,face=root.querySelector('.clock-face');
   if(!face||p?.type!=='clock')return;
-  const shown=p[p.which]==='24:00'?'23:00':p[p.which];
+  const shown=p[p.which]==='24:00'?'00:00':p[p.which]||'00:00';
   const hour=Number(shown.slice(0,2)),minute=Number(shown.slice(3));
   const selectedValue=p.stage==='minute'?minute:
     preferenceClock==='12'?(hour%12||12):hour;
-  const selected=face.querySelector('.clock-number[data-value="'+selectedValue+'"]');
+  const selected=p.touched[p.which][p.stage]?
+    face.querySelector('.clock-number[data-value="'+selectedValue+'"]'):null;
   for(const item of face.querySelectorAll('.clock-number')){
     const isActive=item===selected;
     item.classList.toggle('selected',isActive);
     item.setAttribute('aria-pressed',String(isActive));
   }
+  const hand=face.querySelector('.clock-hand');
+  if(hand)hand.setAttribute('visibility',selected?'visible':'hidden');
   if(selected){
-    const hand=face.querySelector('.clock-hand');
     hand?.setAttribute('x2',String(parseFloat(selected.style.left)));
     hand?.setAttribute('y2',String(parseFloat(selected.style.top)));
   }
   const tab=root.querySelector('.clock-time-tab[data-which="'+p.which+'"] strong');
-  if(tab)tab.textContent=formatTime(p[p.which]);
+  if(tab)tab.textContent=clockHeading(p,p.which);
   // AM/PM might change while crossing the 12/24-hour boundary.
   for(const option of root.querySelectorAll('.clock-ampm [data-ampm]')){
-    const active=(hour<12?'AM':'PM')===option.dataset.ampm;
+    const active=p.period[p.which]===option.dataset.ampm;
     option.classList.toggle('active',active);
   }
 }
@@ -494,23 +647,26 @@ function clockPointerDown(event) {
   const face=event.target.closest('.clock-face');
   if(!face||!root.contains(face))return;
   event.preventDefault();
+  const value=clockValueAtPointer(face,event);
+  if(!clockOptionAvailable(popup,value))return;
   activeClockPointer={
     id:event.pointerId,face,original:popup[popup.which],
+    originalTouched:copy(popup.touched[popup.which]),
+    originalPeriod:popup.period[popup.which],
     which:popup.which,stage:popup.stage,
   };
   try{face.setPointerCapture(event.pointerId);}catch{
-    // Synthetic pointer events used by accessibility tooling may not have
-    // native capture; document-level pointer listeners still receive them.
+    // Keyboard and synthetic interactions may not support pointer capture.
   }
-  setClockDialValue(popup,clockValueAtPointer(face,event));
+  setClockDialValue(popup,value);
   updateClockPreview();
 }
 function clockPointerMove(event) {
   const drag=activeClockPointer;
   if(!drag||drag.id!==event.pointerId||popup?.type!=='clock')return;
   event.preventDefault();
-  setClockDialValue(popup,clockValueAtPointer(drag.face,event));
-  updateClockPreview();
+  if(setClockDialValue(popup,clockValueAtPointer(drag.face,event)))
+    updateClockPreview();
 }
 function clockPointerUp(event) {
   const drag=activeClockPointer;
@@ -532,6 +688,8 @@ function clockPointerCancel(event) {
   if(!drag||drag.id!==event.pointerId)return;
   if(popup?.type==='clock'){
     popup[drag.which]=drag.original;
+    popup.touched[drag.which]=drag.originalTouched;
+    popup.period[drag.which]=drag.originalPeriod;
     popup.which=drag.which;
     popup.stage=drag.stage;
   }
@@ -543,21 +701,32 @@ function saveClockRange(){
   if(!popup||popup.type!=='clock')return;
   const p=popup;
   try{
-    if(minutes(p.start)>=minutes(p.end))throw Error('Until must be later than From.');
+    if(!p.start||!p.end||!['start','end'].every(which=>
+      p.touched[which].hour&&p.touched[which].minute))
+      throw Error('Choose both From and Until (hours and minutes).');
+    const start=minutes(p.start),end=minutes(p.end);
+    if(start>=end)throw Error('Until must be later than From.');
+    if(!p.allowed.some(([a,b])=>start>=a&&end<=b))
+      throw Error('The range must stay within unused, allowed hours.');
     if(p.source==='batch'){
-      // Batch edits only apply after the user's separate review confirmation.
+      // Nothing is published until the separate multi-day Apply confirmation.
       batch.start=p.start;batch.end=p.end;
     }else{
-      if(selectedDay!==p.date)throw Error('That day changed. Please reopen the time editor.');
-      const day=copy(dayEntry(p.date));
-      if(!day||day.status!=='available'||!day.windows[p.index])
-        throw Error('The time window no longer exists.');
-      day.windows[p.index].start=p.start;
-      day.windows[p.index].end=p.end;
-      const duration=minutes(p.end)-minutes(p.start);
-      if(day.windows[p.index].maxMinutes>duration)
-        day.windows[p.index].maxMinutes=duration;
-      // Validate all windows together; do not save an invalid intermediate time.
+      if(selectedDay!==p.date)throw Error('That day changed. Reopen its editor.');
+      const current=dayEntry(p.date);
+      const day=current?.status==='available'?copy(current):
+        {status:'available',windows:[]};
+      if(p.source==='new'){
+        day.windows.push({start:p.start,end:p.end,kind:'confirmed',maxMinutes:null});
+        nextWindowScroll='bottom';
+      }else{
+        if(!day.windows[p.index])throw Error('This time window no longer exists.');
+        day.windows[p.index].start=p.start;
+        day.windows[p.index].end=p.end;
+        const duration=end-start;
+        if(day.windows[p.index].maxMinutes>duration)
+          day.windows[p.index].maxMinutes=duration;
+      }
       validateDay(day);
       changeDay(p.date,day,false);
     }
@@ -575,10 +744,12 @@ function popupHtml(){
   let body='',title='',confirm='';
   if(popup.type==='batch'){
     title='Apply to '+popup.dates.length+' days?';
-    body='<p class="hint">Selected days will receive <strong>'+esc(summary(popup.day))+'</strong>.</p>'+
+    body='<p class="hint">Review how the selected days will change. Green is confirmed, yellow tentative, red unavailable.</p>'+
       '<div class="preview-list">'+popup.dates.map(d=>
-        '<div><strong>'+esc(datestring(d,'mini'))+'</strong><span>'+
-        esc(summary(dayEntry(d)))+' → '+esc(summary(popup.day))+'</span></div>').join('')+'</div>';
+        '<div class="preview-change"><strong>'+esc(datestring(d,'mini'))+'</strong>'+
+        '<div class="preview-before">Before: '+statusText(dayEntry(d))+'</div>'+
+        '<div class="preview-after">After: '+statusText(popup.changes.find(x=>x.date===d).day)+'</div>'+
+        miniTimeBar(popup.changes.find(x=>x.date===d).day)+'</div>').join('')+'</div>';
     confirm='Apply to selected days';
   }else if(popup.type==='copy'){
     title='Copy '+datestring(selectedDay,'mini')+' to…';
@@ -610,12 +781,14 @@ function popupHtml(){
     '</div></div></div>';
 }
 let lastEditorKey='';
+let nextWindowScroll=null;
 function render(){
   if(!model)return;
   const oldY=window.scrollY;
   const editorKey=view==='week'?(multi?'batch':selectedDay):'';
   const editorScroll=editorKey===lastEditorKey?
-    root.querySelector('.workspace>.editor-card')?.scrollTop||0:0;
+    (root.querySelector('.window-list')||
+      root.querySelector('.workspace>.editor-card'))?.scrollTop||0:0;
   const content=view==='review'?reviewPage():view==='done'?donePage():
     '<div class="workspace">'+weekCard()+(multi?batchEditor():singleEditor())+'</div>';
   root.innerHTML='<main class="app-shell">'+stageHeader()+
@@ -630,8 +803,13 @@ function render(){
     '<div class="privacy-note">TEST ONLY · Your answers stay in the isolated WinterBot testing system.</div>'+
     popupHtml()+'</main>';
   window.scrollTo(0,oldY);
-  const editor=root.querySelector('.workspace>.editor-card');
-  if(editor&&editorScroll)editor.scrollTop=editorScroll;
+  const editor=root.querySelector('.window-list')||
+    root.querySelector('.workspace>.editor-card');
+  if(editor){
+    if(nextWindowScroll==='bottom')editor.scrollTop=editor.scrollHeight;
+    else if(editorScroll)editor.scrollTop=editorScroll;
+  }
+  nextWindowScroll=null;
   lastEditorKey=editorKey;
   if(view==='review')setupReviewScroll();
 }
@@ -725,27 +903,6 @@ function selectDay(date){
   }else selectedDay=date;
   render();
 }
-function freeWindow(day){
-  const occupied=(day?.windows||[]).map(w=>[minutes(w.start),minutes(w.end)])
-    .sort((a,b)=>a[0]-b[0]);
-  let current=9*60;
-  for(const [start,end] of occupied){
-    if(start-current>=30)return {start:clock(current),end:clock(Math.min(start,current+120)),
-      kind:'confirmed',maxMinutes:null};
-    current=Math.max(current,end);
-  }
-  if(1440-current>=30)return {start:clock(current),end:clock(Math.min(1440,current+120)),
-    kind:'confirmed',maxMinutes:null};
-  current=0;
-  for(const [start,end] of occupied){
-    if(start-current>=30)return {start:clock(current),end:clock(Math.min(start,current+120)),
-      kind:'confirmed',maxMinutes:null};
-    current=end;
-  }
-  if(1440-current>=30)return {start:clock(current),end:clock(Math.min(1440,current+120)),
-    kind:'confirmed',maxMinutes:null};
-  throw Error('No free time remains on this day. Adjust an existing range.');
-}
 async function openReview(){
   view='review';reviewReady=false;reviewSeenBottom=false;notice='';render();
   try{
@@ -769,7 +926,7 @@ async function confirmPopup(){
   const active=popup;
   try{
     if(active.type==='batch'){
-      changeMany(active.dates,active.day);
+      changeDays(active.changes);
       multi=false;chosen.clear();popup=null;notice='';render();return;
     }
     if(active.type==='copy'){
@@ -793,13 +950,16 @@ async function confirmPopup(){
 function openBatchConfirmation(){
   const dates=model.round.dates.filter(d=>chosen.has(d));
   if(!dates.length)throw Error('Select one or more days.');
-  const day=batch.mode==='off'?{status:'unavailable',windows:[]}:
-    batch.mode==='all'?allDay(batch.kind):validateDay({status:'available',windows:[
-      {start:batch.start,end:batch.end,kind:batch.kind,maxMinutes:null},
-    ]});
+  const hours=batch.mode==='hours'?validateDay({status:'available',windows:[
+    {start:batch.start,end:batch.end,kind:batch.kind,maxMinutes:null},
+  ]}):null;
+  const changes=dates.map(date=>({date,day:batch.mode==='off'?
+    {status:'unavailable',windows:[]}:
+    batch.mode==='all'?allPermittedDay(date,batch.kind):hours}));
   const replacing=dates.some(d=>dayEntry(d));
-  if(replacing){popup={type:'batch',dates,day};render();}
-  else{changeMany(dates,day);multi=false;chosen.clear();notice='Availability applied to '+dates.length+' days.';render();}
+  if(replacing){popup={type:'batch',dates,changes};render();}
+  else{changeDays(changes);multi=false;chosen.clear();
+    notice='Availability applied to '+dates.length+' days.';render();}
 }
 function onClick(event){
   const element=event.target.closest('[data-action]');
@@ -827,39 +987,39 @@ function onClick(event){
         chooseOnClock(Number(element.dataset.value));return;
       }
       if(action==='clock-ampm'){
-        const current=popup[popup.which]==='24:00'?'23:00':popup[popup.which];
-        const h=Number(current.slice(0,2))%12;
-        popup[popup.which]=clock((element.dataset.ampm==='PM'?12:0)*60+h*60+
-          Number(current.slice(3)));
+        const which=popup.which;
+        popup.period[which]=element.dataset.ampm;
+        if(popup.touched[which].hour&&popup[which]){
+          const current=popup[which]==='24:00'?'00:00':popup[which];
+          const h=Number(current.slice(0,2))%12;
+          popup[which]=clock((element.dataset.ampm==='PM'?12:0)*60+h*60+
+            Number(current.slice(3)));
+        }
         popup.error='';popup.completed=false;redrawClockOnly();return;
       }
       if(action==='clock-endday'){
-        popup.end='24:00';popup.which='end';popup.stage='hour';
+        if(!eligibleClockMinute({...popup,which:'end'},1440))return;
+        popup.end='24:00';popup.touched.end={hour:true,minute:true};
+        popup.period.end='AM';popup.which='end';popup.stage='minute';
         popup.error='';popup.completed=true;redrawClockOnly();return;
       }
       if(action==='clock-save'){saveClockRange();return;}
     }
     if(action==='confirm-popup'){confirmPopup();return;}
     if(action==='pick-day'){selectDay(element.dataset.date);return;}
+    if(action==='mode-single'){
+      multi=false;chosen.clear();notice='';render();return;
+    }
     if(action==='multi'){
-      multi=!multi;chosen.clear();notice='';render();return;
+      if(!multi)batch={kind:'confirmed',start:null,end:null,mode:'hours'};
+      multi=true;chosen.clear();notice='';render();return;
     }
-    if(action==='set-hours'){
-      const day=dayEntry(selectedDay);
-      if(day?.status!=='available')
-        changeDay(selectedDay,{status:'available',windows:[{
-          start:'18:00',end:'23:00',kind:'confirmed',maxMinutes:null,
-        }]});
-      return;
-    }
-    if(action==='all-day'){changeDay(selectedDay,allDay());return;}
+     if(action==='all-day'){changeDay(selectedDay,allPermittedDay(selectedDay));return;}
     if(action==='unavailable'){changeDay(selectedDay,{status:'unavailable',windows:[]});return;}
     if(action==='clear-day'){changeDay(selectedDay,null);return;}
     if(action==='add-window'){
-      const day=dayEntry(selectedDay);
-      const result=day?.status==='available'?copy(day):{status:'available',windows:[]};
-      result.windows.push(freeWindow(result));
-      changeDay(selectedDay,result);return;
+      openClockPicker({dataset:{index:'-2',which:'start'}});
+      return;
     }
     if(action==='toggle-kind'){
       const day=copy(dayEntry(selectedDay));
@@ -910,9 +1070,21 @@ function onChange(event){
     if(!element.checked)popup.dates=popup.dates.filter(d=>d!==date);
     render();return;
   }
+  if(element.matches('[data-clock-format]')){
+    preferenceClock=element.checked?'24':'12';
+    model.member.clockFormat=preferenceClock;
+    request('ux/preference',{clock:preferenceClock}).catch(()=>{});
+    if(popup?.type==='clock')redrawClockOnly();
+    else render();
+    return;
+  }
   if(element.hasAttribute('data-batch')){
     const field=element.dataset.batch;
     batch[field]=element.value;
+    if(field==='kind'){
+      element.classList.toggle('confirmed',batch.kind==='confirmed');
+      element.classList.toggle('tentative',batch.kind==='tentative');
+    }
     if(field==='start'||field==='end'){
       if(!Number.isFinite(minutes(element.value)))return actionError(Error('Choose a valid time.'));
     }

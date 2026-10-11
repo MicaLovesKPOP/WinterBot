@@ -107,3 +107,33 @@ test('draft rejects unknown dates, duplicate dates and unrequested submissions',
   await assert.rejects(()=>ux.mutate(USER,'template-apply',{confirm:true}),/No saved usual week/);
   assert.equal((await ux.read(USER)).progress.answered,0);
 });
+
+test('moderator day-hour bounds are exposed and enforced by the test backend',async t=>{
+  const ux=fixture(t);
+  const date=(await ux.read(USER)).round.dates[0];
+  await ux.store.transaction(state=>{
+    state.rounds.weekly.allowedHoursByDate={
+      [date]:{start:'17:00',end:'22:00'},
+    };
+  });
+  const state=await ux.read(USER);
+  assert.deepEqual(state.round.allowedHoursByDate[date],
+    {start:'17:00',end:'22:00'});
+  await assert.rejects(()=>ux.mutate(USER,'draft',{days:[
+    {date,...available('16:00','20:00')},
+  ]}),/allowed hours/);
+  await assert.rejects(()=>ux.mutate(USER,'draft',{days:[
+    {date,...available('20:00','24:00')},
+  ]}),/allowed hours/);
+  await ux.mutate(USER,'draft',{days:[
+    {date,...available('17:30','22:00')},
+  ]});
+  assert.equal((await ux.read(USER)).member.draft[date].windows[0].end,'22:00');
+  assert.equal((await ux.read(OTHER)).progress.answered,0);
+  // A saved usual-week template must not bypass a new moderator restriction.
+  await ux.store.transaction(state=>{
+    state.templates[USER]={Monday:available('00:00','24:00')};
+  });
+  await assert.rejects(()=>ux.mutate(USER,'template-apply',{confirm:true}),/allowed hours/);
+  assert.equal((await ux.read(USER)).member.draft[date].windows[0].start,'17:30');
+});
