@@ -37,7 +37,7 @@ function minutes(value){
 function clock(m){return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');}
 function formatTime(value){
   if(preferenceClock==='24')return value;
-  if(value==='24:00')return '12 AM (end)';
+  if(value==='24:00')return '12:00 AM (end of day)';
   const h=Number(value.slice(0,2));
   return String(h%12||12)+value.slice(2)+(h<12?' AM':' PM');
 }
@@ -101,7 +101,7 @@ function saveLabel(){
   return model?.member?.submittedAt?'Draft saved':'Saved as draft';
 }
 function setAlert(value,isError=false){notice=value;noticeError=isError;render();}
-function changeDay(date,day){
+function changeDay(date,day,renderNow=true){
   const normalized=validateDay(day);
   if(normalized)model.member.draft[date]=normalized;
   else delete model.member.draft[date];
@@ -110,7 +110,7 @@ function changeDay(date,day){
   dirty.set(date,payload);
   errorSaving=false;
   scheduleSave();
-  render();
+  if(renderNow)render();
 }
 function changeMany(dates,day){
   const normalized=validateDay(day);
@@ -188,15 +188,16 @@ function timeRail(windows){
     '<div class="time-track">'+segments+'</div><div class="time-ticks">'+ticks+'</div></div>';
 }
 function timeInput(date,index,field,value){
-  if(field==='end'&&value==='24:00')
-    return '<div class="end-of-day"><span>End of day · 24:00</span>'+
-      makeButton('Choose time','end-clock','minor','data-index="'+index+'"')+'</div>';
-  const input='<input type="time" step="300" value="'+esc(value)+
-    '" data-date="'+esc(date)+'" data-index="'+index+'" data-field="'+field+
-    '" aria-label="'+(field==='start'?'Start time':'End time')+'">';
-  return field==='end'?'<div class="time-control">'+input+
-    makeButton('End of day','set-end-of-day','minor','data-index="'+index+'"')+
-    '</div>':input;
+  const label=field==='start'?'From':'Until';
+  const shown=value==='24:00'?
+    (preferenceClock==='12'?'12:00 AM · End':'24:00 · End'):formatTime(value);
+  return '<button type="button" class="clock-trigger" data-action="edit-range"'+
+    ' data-index="'+index+'" data-which="'+field+'"'+
+    ' aria-label="Edit '+label.toLowerCase()+' time, '+esc(shown)+'">'+
+    '<span>'+esc(shown)+'</span>'+
+    '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"'+
+    ' fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">'+
+    '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>';
 }
 function durationOptions(current){
   const options=[{value:'',text:'No limit'}];
@@ -264,11 +265,9 @@ function batchEditor(){
     makeButton('Unavailable','batch-mode','choice '+(batch.mode==='off'?'selected':'soft'),'data-mode="off"')+
     '</div>'+
     (batch.mode==='hours'?'<div class="batch-fields"><div class="field"><label>From</label>'+
-      '<input type="time" step="300" value="'+batch.start+'" data-batch="start"></div>'+
+      timeInput(null,-1,'start',batch.start)+'</div>'+
       '<div class="field"><label>Until</label>'+
-      (batch.end==='24:00'?'<div class="end-of-day">24:00'+makeButton('Choose time','batch-end-time','minor')+'</div>':
-      '<div class="time-control"><input type="time" step="300" value="'+batch.end+'" data-batch="end">'+
-      makeButton('End of day','batch-end-of-day','minor')+'</div>')+
+      timeInput(null,-1,'end',batch.end)+
       '</div><div class="field"><label>Certainty</label><select data-batch="kind">'+
       '<option value="confirmed"'+(batch.kind==='confirmed'?' selected':'')+'>Available</option>'+
       '<option value="tentative"'+(batch.kind==='tentative'?' selected':'')+'>Tentative</option>'+
@@ -310,8 +309,154 @@ function donePage(){
     makeButton(model.template?'Update usual week':'Save as my usual week','save-template','primary')+
     '</div></section>';
 }
+function facePoint(value,radius) {
+  const angle=2*Math.PI*value/12-Math.PI/2;
+  return {x:110+radius*Math.cos(angle),y:110+radius*Math.sin(angle)};
+}
+function dialFace(p) {
+  const time=p[p.which]==='24:00'?'23:00':p[p.which];
+  const hour=Number(time.slice(0,2)),minute=Number(time.slice(3));
+  const isHours=p.stage==='hour';
+  let options;
+  if(!isHours) {
+    options=Array.from({length:12},(_,i)=>({
+      value:i*5,label:String(i*5).padStart(2,'0'),position:i,radius:88,
+      selected:minute===i*5,
+    }));
+  }else if(preferenceClock==='24'){
+    options=[
+      ...Array.from({length:12},(_,i)=>({
+        value:i||12,label:String(i||12).padStart(2,'0'),position:i,radius:88,
+        selected:hour===(i||12),
+      })),
+      ...Array.from({length:12},(_,i)=>({
+        value:i===0?0:i+12,label:String(i===0?0:i+12).padStart(2,'0'),
+        position:i,radius:56,inner:true,selected:hour===(i===0?0:i+12),
+      })),
+    ];
+  }else{
+    options=Array.from({length:12},(_,i)=>({
+      value:i||12,label:String(i||12),position:i,radius:88,
+      selected:(hour%12||12)===(i||12),
+    }));
+  }
+  const active=options.find(x=>x.selected);
+  const point=active?facePoint(active.position,active.radius):{x:110,y:22};
+  return '<div class="clock-face" role="group" aria-label="'+
+    (isHours?'Choose an hour':'Choose minutes in five-minute steps')+'">'+
+    '<svg viewBox="0 0 220 220" aria-hidden="true" class="clock-hand-svg">'+
+    (isHours&&preferenceClock==='24'?'<circle cx="110" cy="110" r="56" class="clock-inner-ring"/>':'')+
+    '<line x1="110" y1="110" x2="'+point.x.toFixed(1)+'" y2="'+point.y.toFixed(1)+
+    '" class="clock-hand"/><circle cx="110" cy="110" r="4" class="clock-hub"/></svg>'+
+    options.map(option=>{
+      const pos=facePoint(option.position,option.radius);
+      return '<button type="button" data-action="clock-choice" data-value="'+option.value+
+        '" class="clock-number'+(option.inner?' inner':'')+(option.selected?' selected':'')+
+        '" style="left:'+pos.x.toFixed(1)+'px;top:'+pos.y.toFixed(1)+'px"'+
+        ' aria-label="'+(isHours?'Hour '+option.label:'Minute '+option.label)+'"'+
+        ' aria-pressed="'+option.selected+'">'+option.label+'</button>';
+    }).join('')+'</div>';
+}
+function clockPopupHtml(p) {
+  const format=value=>value==='24:00'?
+    (preferenceClock==='12'?'12:00 AM':'24:00'):formatTime(value);
+  const current=p[p.which]==='24:00'?'23:00':p[p.which];
+  const is12=preferenceClock==='12';
+  const ampm=Number(current.slice(0,2))<12?'AM':'PM';
+  return '<div class="overlay clock-overlay" data-action="dismiss-overlay">'+
+    '<section class="dialog clock-dialog" role="dialog" aria-modal="true" aria-label="Choose availability hours">'+
+    '<div class="dialog-header"><h2>Choose availability hours</h2>'+
+    makeButton('×','dismiss','icon-button','aria-label="Close clock picker"')+'</div>'+
+    '<div class="clock-range-tabs" role="group" aria-label="Range endpoints">'+
+    ['start','end'].map(which=>
+      '<button type="button" class="clock-time-tab'+(p.which===which?' active':'')+
+      '" data-action="clock-target" data-which="'+which+'"'+
+      ' aria-pressed="'+(p.which===which)+'"><span>'+
+      (which==='start'?'From':p.end==='24:00'?'Until · end of day':'Until')+
+      '</span><strong>'+esc(format(p[which]))+
+      '</strong></button>').join('')+'</div>'+
+    '<div class="clock-toolbar"><div class="clock-stages" role="group" aria-label="Choose hour or minute">'+
+    makeButton('Hours','clock-stage',p.stage==='hour'?'active':'','data-stage="hour"')+
+    makeButton('Minutes','clock-stage',p.stage==='minute'?'active':'','data-stage="minute"')+'</div>'+
+    (is12?'<div class="clock-ampm" role="group" aria-label="AM or PM">'+
+      makeButton('AM','clock-ampm',ampm==='AM'?'active':'','data-ampm="AM"')+
+      makeButton('PM','clock-ampm',ampm==='PM'?'active':'','data-ampm="PM"')+'</div>':
+      '<span class="clock-hint">24-hour clock</span>')+'</div>'+
+    dialFace(p)+
+    '<div class="clock-bottom-line">'+
+    '<span>'+(p.stage==='hour'&&preferenceClock==='24'?
+      'Hours: 01–12 outer ring, 13–00 inner ring':
+      p.stage==='hour'?'Choose the hour on the dial':'Minutes: 5-minute steps')+'</span>'+
+    (p.which==='end'?makeButton('End of day','clock-endday',
+      p.end==='24:00'?'selected':'','title="Set the end to 24:00"'):'')+
+    '</div>'+
+    (p.error?'<p class="clock-error" role="alert">'+esc(p.error)+'</p>':'')+
+    '<div class="bottom-actions clock-actions">'+
+    makeButton('Cancel','dismiss','outline')+
+    makeButton('Apply range','clock-save','primary')+
+    '</div></section></div>';
+}
+function redrawClockOnly() {
+  const layer=root.querySelector('.clock-overlay');
+  if(layer&&popup?.type==='clock')layer.outerHTML=clockPopupHtml(popup);
+}
+function openClockPicker(element) {
+  const index=Number(element.dataset.index);
+  const source=index===-1?batch:dayEntry(selectedDay)?.windows?.[index];
+  if(!source)throw Error('Select an available time window first.');
+  popup={
+    type:'clock',source:index===-1?'batch':'single',date:selectedDay,index,
+    start:source.start,end:source.end,which:element.dataset.which,
+    stage:'hour',error:'',
+  };
+  render();
+}
+function chooseOnClock(value) {
+  if(!popup||popup.type!=='clock')return;
+  const p=popup;
+  const current=p[p.which]==='24:00'?'23:00':p[p.which];
+  let hour=Number(current.slice(0,2)),minute=Number(current.slice(3));
+  if(p.stage==='hour'){
+    hour=preferenceClock==='24'?value:(value%12)+(hour>=12?12:0);
+    p.stage='minute';
+  }else minute=value;
+  p[p.which]=clock(hour*60+minute);
+  p.error='';
+  redrawClockOnly();
+}
+function saveClockRange(){
+  if(!popup||popup.type!=='clock')return;
+  const p=popup;
+  try{
+    if(minutes(p.start)>=minutes(p.end))throw Error('Until must be later than From.');
+    if(p.source==='batch'){
+      // Batch edits only apply after the user's separate review confirmation.
+      batch.start=p.start;batch.end=p.end;
+    }else{
+      if(selectedDay!==p.date)throw Error('That day changed. Please reopen the time editor.');
+      const day=copy(dayEntry(p.date));
+      if(!day||day.status!=='available'||!day.windows[p.index])
+        throw Error('The time window no longer exists.');
+      day.windows[p.index].start=p.start;
+      day.windows[p.index].end=p.end;
+      const duration=minutes(p.end)-minutes(p.start);
+      if(day.windows[p.index].maxMinutes>duration)
+        day.windows[p.index].maxMinutes=duration;
+      // Validate all windows together; do not save an invalid intermediate time.
+      validateDay(day);
+      changeDay(p.date,day,false);
+    }
+    popup=null;
+    render();
+  }catch(error){
+    p.error=String(error.message||error);
+    redrawClockOnly();
+  }
+}
+
 function popupHtml(){
   if(!popup)return '';
+  if(popup.type==='clock')return clockPopupHtml(popup);
   let body='',title='',confirm='';
   if(popup.type==='batch'){
     title='Apply to '+popup.dates.length+' days?';
@@ -349,9 +494,13 @@ function popupHtml(){
     makeButton(confirm,'confirm-popup','primary',popup.type==='copy'&&!popup.dates.length?'disabled':'')+
     '</div></div></div>';
 }
+let lastEditorKey='';
 function render(){
   if(!model)return;
   const oldY=window.scrollY;
+  const editorKey=view==='week'?(multi?'batch':selectedDay):'';
+  const editorScroll=editorKey===lastEditorKey?
+    root.querySelector('.workspace>.editor-card')?.scrollTop||0:0;
   const content=view==='review'?reviewPage():view==='done'?donePage():
     '<div class="workspace">'+weekCard()+(multi?batchEditor():singleEditor())+'</div>';
   root.innerHTML='<main class="app-shell">'+stageHeader()+
@@ -366,6 +515,9 @@ function render(){
     '<div class="privacy-note">TEST ONLY · Your answers stay in the isolated WinterBot testing system.</div>'+
     popupHtml()+'</main>';
   window.scrollTo(0,oldY);
+  const editor=root.querySelector('.workspace>.editor-card');
+  if(editor&&editorScroll)editor.scrollTop=editorScroll;
+  lastEditorKey=editorKey;
   if(view==='review')setupReviewScroll();
 }
 function setupReviewScroll(){
@@ -541,6 +693,31 @@ function onClick(event){
   try{
     if(action==='dismiss-overlay'&&element===event.target){popup=null;render();return;}
     if(action==='dismiss'){popup=null;render();return;}
+    if(action==='edit-range'){openClockPicker(element);return;}
+    if(popup?.type==='clock'){
+      if(action==='clock-target'){
+        popup.which=element.dataset.which;
+        popup.stage='hour';popup.error='';
+        redrawClockOnly();return;
+      }
+      if(action==='clock-stage'){
+        popup.stage=element.dataset.stage;
+        redrawClockOnly();return;
+      }
+      if(action==='clock-choice'){chooseOnClock(Number(element.dataset.value));return;}
+      if(action==='clock-ampm'){
+        const current=popup[popup.which]==='24:00'?'23:00':popup[popup.which];
+        const h=Number(current.slice(0,2))%12;
+        popup[popup.which]=clock((element.dataset.ampm==='PM'?12:0)*60+h*60+
+          Number(current.slice(3)));
+        popup.error='';redrawClockOnly();return;
+      }
+      if(action==='clock-endday'){
+        popup.end='24:00';popup.which='end';popup.stage='hour';
+        popup.error='';redrawClockOnly();return;
+      }
+      if(action==='clock-save'){saveClockRange();return;}
+    }
     if(action==='confirm-popup'){confirmPopup();return;}
     if(action==='pick-day'){selectDay(element.dataset.date);return;}
     if(action==='multi'){
@@ -575,13 +752,7 @@ function onClick(event){
       day.windows.splice(Number(element.dataset.index),1);
       changeDay(selectedDay,day.windows.length?day:null);return;
     }
-    if(action==='end-clock'||action==='set-end-of-day'){
-      const day=copy(dayEntry(selectedDay));
-      day.windows[Number(element.dataset.index)].end=action==='end-clock'?'23:00':'24:00';
-      changeDay(selectedDay,day);return;
-    }
-    if(action==='batch-end-time'){batch.end='23:00';render();return;}
-    if(action==='batch-end-of-day'){batch.end='24:00';render();return;}
+
     if(action==='batch-mode'){batch.mode=element.dataset.mode;render();return;}
     if(action==='apply-batch'){openBatchConfirmation();return;}
     if(action==='copy'){

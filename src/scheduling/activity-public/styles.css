@@ -360,3 +360,84 @@ button:hover:not(:disabled){filter:brightness(1.09)}
 
 .review-scroll-hint{color:var(--warn);font-size:11px;margin:4px 0 2px}
 .review-scroll-hint[hidden]{display:none}
+
+
+/* Familiar touch-friendly clock-face time-range picker. Unlike the browser's
+ * scrolling <input type=time> widget, it has a consistent experience inside
+ * Discord and always fits the 460px Activity iframe. */
+.clock-trigger{
+  width:100%;height:36px;min-width:0;display:flex;align-items:center;
+  justify-content:space-between;gap:5px;padding:6px 9px;
+  border:1px solid #505364;border-radius:8px;background:#171922;
+  color:var(--ink);font-size:12px;font-weight:750;text-align:left;
+}
+.clock-trigger svg{flex-shrink:0;color:var(--muted)}
+.clock-trigger:hover,.clock-trigger:focus-visible{border-color:var(--brand);background:#28283a}
+.clock-overlay{z-index:40;overscroll-behavior:contain;padding:12px}
+.clock-dialog{
+  width:min(320px,calc(100vw - 18px));max-width:none;
+  max-height:calc(100dvh - 32px);padding:10px;
+  display:flex;flex-direction:column;gap:5px;overflow-y:auto;scrollbar-width:thin;
+  background:#22242d;border-color:#656678;
+}
+.clock-dialog .dialog-header{margin:0 0 2px}
+.clock-dialog .dialog-header h2{font-size:16px}
+.clock-range-tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.clock-time-tab{
+  border:1px solid var(--border);background:#2a2c36;
+  border-radius:9px;padding:6px 9px;min-width:0;text-align:left;color:var(--ink);
+}
+.clock-time-tab span{display:block;color:var(--muted);font-size:10px;margin-bottom:2px}
+.clock-time-tab strong{display:block;font-size:18px;line-height:1.12;font-weight:820;letter-spacing:-.03em}
+.clock-time-tab.active{border-color:var(--brand);background:#35334c;box-shadow:inset 0 0 0 1px #9994ef55}
+.clock-time-tab.active strong{color:#eeecff}
+.clock-toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:27px}
+.clock-stages,.clock-ampm{display:flex;gap:3px}
+.clock-stages .button,.clock-ampm .button{
+  background:transparent;color:var(--muted);border-color:transparent;
+  border-radius:7px;min-height:24px;padding:3px 8px;font-size:11px;
+}
+.clock-stages .button.active,.clock-ampm .button.active{
+  background:#3c3b55;color:#f5f3ff;border-color:#9994ef66;
+}
+.clock-hint{font-size:10px;color:var(--muted)}
+.clock-face{
+  position:relative;flex-shrink:0;width:220px;height:220px;margin:0 auto;
+  background:radial-gradient(circle at center,#343645 0%,#343645 5px,#292b37 6px,#292b37 100%);
+  border:1px solid #4a4c5d;border-radius:50%;
+  touch-action:manipulation;
+}
+.clock-hand-svg{width:220px;height:220px;position:absolute;inset:0;pointer-events:none}
+.clock-inner-ring{fill:none;stroke:#555667;stroke-width:1;stroke-dasharray:2 4}
+.clock-hand{stroke:var(--brand);stroke-width:3;stroke-linecap:round}
+.clock-hub{fill:var(--brand)}
+.clock-number{
+  position:absolute;width:29px;height:29px;border-radius:50%;
+  transform:translate(-50%,-50%);
+  display:grid;place-items:center;padding:0;border:none;
+  background:transparent;color:#e2e3ed;font-size:12px;font-weight:770;
+  touch-action:manipulation;z-index:1;line-height:1;
+}
+.clock-number.inner{font-size:11px;color:#e0e1ed;width:26px;height:26px}
+.clock-number.selected{background:var(--brand);color:#191a2a;box-shadow:0 2px 13px #0004}
+.clock-number:hover:not(.selected){background:#474a60}
+.clock-bottom-line{
+  display:flex;justify-content:space-between;gap:5px;align-items:center;
+  min-height:22px;color:var(--muted);font-size:10px;
+}
+.clock-bottom-line .button{min-height:24px;padding:3px 8px;flex-shrink:0}
+.clock-bottom-line .button.selected{border-color:var(--brand);color:var(--brand)}
+.clock-error{margin:0;padding:5px 8px;color:#ffe1e4;background:#552d36;
+  border:1px solid #a5576a;border-radius:6px;font-size:11px}
+.clock-actions{position:sticky;bottom:0;z-index:3;flex-shrink:0;
+  margin:0;padding:5px 0 0;gap:6px;background:#22242d}
+.clock-actions .button{min-height:31px;padding:5px 14px;font-size:11px}
+@media(max-width:340px){
+  .clock-dialog{width:calc(100vw - 12px);padding:8px}
+  .clock-time-tab strong{font-size:16px}
+}
+@media(max-height:390px){
+  .clock-face{transform:scale(.82);transform-origin:center center;margin:-20px auto;
+    width:220px;height:220px}
+  .clock-hand-svg{width:220px;height:220px}
+}

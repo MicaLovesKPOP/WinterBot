@@ -97,8 +97,18 @@ Run these as the test-server owner or a member with Manage Server permission:
 2. Click **Open availability planner in Discord**. This launches the embedded Activity,
    NOT a browser link. The new prototype opens a familiar seven-day calendar.
 3. Click a day card. Try **Available hours**, **All day**, **Unavailable**, and the
-   confirmed/tentative choice on each time range. Try extra ranges and duration limits.
-   Editing responds locally; the saved-draft indicator reflects remote persistence.
+   confirmed/tentative choice on each time range. Time editing now uses a custom
+   **clock-face range picker** instead of browser scrolling dropdowns:
+   - Click From or Until to open one small range picker with both endpoints.
+   - Tap an hour (in 24h mode: 01–12 outer ring / 13–00 inner ring); the
+     dial automatically advances to 5-minute steps.
+   - In 12h mode, use the normal 1–12 dial plus the AM/PM toggle.
+   - Select End of day (24:00) only for the Until endpoint.
+   - Apply both times together. Invalid/overlapping ranges display an error
+     in the picker without saving a partially edited day.
+   - The exact same picker is used when configuring multiple days at once.
+   Try extra windows and optional duration limits. Editing responds locally;
+   the saved-draft indicator reflects remote persistence.
 4. Turn on **Select multiple days**, pick several days, configure common hours, and
    apply. Existing answers get an overwrite preview before replacement.
 5. Use **Copy this day** to copy all its windows to chosen dates.

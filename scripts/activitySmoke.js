@@ -119,7 +119,59 @@ async function run(){
     await page.locator('[data-action="unavailable"]').click();
     assert.equal(await page.locator('.day-card.state-off').count(),1);
     await page.locator('.day-card').nth(1).click();
-    await page.locator('[data-field="start"]').first().fill('19:30');
+    assert.equal(await page.locator('input[type="time"]').count(),0,
+      'The Activity must not expose the browser scrolling time picker');
+    // A time range can be adjusted atomically. An invalid provisional From
+    // time is rejected inside the picker without changing the stored day.
+    await page.locator('[data-action="edit-range"][data-which="start"]').first().click();
+    await page.getByRole('dialog',{name:'Choose availability hours'}).waitFor();
+    await page.locator('.clock-number[data-value="23"]').click();
+    await page.locator('.clock-number[data-value="30"]').click();
+    await page.locator('[data-action="clock-save"]').click();
+    await page.getByText('Until must be later than From.').waitFor();
+    await page.setViewportSize({width:462,height:460});
+    const invalidActions=await page.evaluate(()=>{
+      const dialog=document.querySelector('.clock-dialog');
+      const apply=dialog?.querySelector('[data-action="clock-save"]');
+      const bounds=apply?.getBoundingClientRect();
+      const hit=bounds&&document.elementFromPoint(bounds.left+bounds.width/2,
+        bounds.top+bounds.height/2);
+      return {bottom:bounds?.bottom,top:bounds?.top,
+        clickable:hit===apply||apply?.contains(hit)};
+    });
+    assert.ok(invalidActions.bottom<=460&&invalidActions.top>=0&&
+      invalidActions.clickable,'Clock controls must remain visible even for an invalid range: '+
+      JSON.stringify(invalidActions));
+    await page.locator('[data-action="dismiss"]').last().click();
+    assert.equal(await page.locator('[data-action="edit-range"][data-which="start"]').first()
+      .getByText('18:00').count(),1,'Invalid provisional range never saved');
+
+    await page.locator('[data-action="edit-range"][data-which="start"]').first().click();
+    await page.getByRole('dialog',{name:'Choose availability hours'}).waitFor();
+    assert.equal(await page.locator('.clock-number').count(),24,
+      '24-hour clock uses the familiar outer/inner hour rings');
+    await page.setViewportSize({width:462,height:460});
+    const bounds=await page.locator('.clock-dialog').boundingBox();
+    assert.ok(bounds.y>=0 && bounds.y+bounds.height<=460 && bounds.width<=462,
+      'Clock dialog must fit the narrow 460px Activity: '+JSON.stringify(bounds));
+    fs.mkdirSync(path.join(process.cwd(),'preview-screens'),{recursive:true});
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','clock-picker-462x460-hour.png')});
+    await page.setViewportSize({width:320,height:460});
+    const minimumBounds=await page.locator('.clock-dialog').boundingBox();
+    assert.ok(minimumBounds.x>=0&&minimumBounds.y>=0&&
+      minimumBounds.x+minimumBounds.width<=320&&minimumBounds.y+minimumBounds.height<=460,
+      'Clock picker must fit 320x460 without clipping: '+JSON.stringify(minimumBounds));
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','clock-picker-320x460-hour.png')});
+    await page.setViewportSize({width:462,height:460});
+    await page.locator('.clock-number[data-value="19"]').click();
+    assert.equal(await page.locator('.clock-number').count(),12,
+      'Hour selection advances to 5-minute clock face');
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','clock-picker-462x460-minute.png')});
+    await page.locator('.clock-number[data-value="30"]').click();
+    await page.locator('[data-action="clock-save"]').click();
+    await page.locator('[data-action="edit-range"][data-which="start"]').first()
+      .getByText('19:30').waitFor();
+    await page.setViewportSize({width:1000,height:860});
     await page.locator('[data-action="toggle-kind"]').first().click();
     await page.getByText('Tentative hours').waitFor();
     console.log('Local editing remains immediate during background saves.');
@@ -127,7 +179,16 @@ async function run(){
     await page.locator('[data-action="multi"]').click();
     await page.locator('.day-card').nth(0).click();
     await page.locator('.day-card').nth(3).click();
-    await page.locator('[data-action="batch-mode"][data-mode="all"]').click();
+    await page.locator('[data-action="batch-mode"][data-mode="hours"]').click();
+    await page.locator('[data-action="edit-range"][data-which="start"]').click();
+    await page.locator('.clock-number[data-value="20"]').click();
+    await page.locator('.clock-number[data-value="0"]').click();
+    await page.locator('[data-action="clock-target"][data-which="end"]').click();
+    await page.locator('.clock-number[data-value="22"]').click();
+    await page.locator('.clock-number[data-value="30"]').click();
+    await page.locator('[data-action="clock-save"]').click();
+    assert.match(await page.locator('[data-action="edit-range"][data-which="start"]').innerText(),/20:00/);
+    assert.match(await page.locator('[data-action="edit-range"][data-which="end"]').innerText(),/22:30/);
     await page.locator('[data-action="apply-batch"]').click();
     await page.getByText('Your week',{exact:true}).waitFor().catch(()=>{});
     assert.equal(await page.locator('.day-card.state-yes').count(),2);
@@ -180,10 +241,32 @@ async function run(){
     await page.locator('[data-action="back"]').click();
     assert.equal(await page.locator('[data-action="reuse"]').count(),1,
       'saved usual-week template should appear as a familiar shortcut');
+    await page.locator('.day-card').nth(1).click();
     await page.locator('[data-action="clock"]').click();
     await page.getByRole('button',{name:'12-hour clock'}).waitFor();
+    await page.locator('[data-action="edit-range"][data-which="start"]').first().click();
+    assert.equal(await page.locator('.clock-number').count(),12,
+      '12-hour clock uses one familiar hour ring and AM/PM controls');
+    await page.locator('[data-action="clock-ampm"][data-ampm="AM"]').click();
+    await page.locator('.clock-number[data-value="7"]').click();
+    await page.locator('.clock-number[data-value="30"]').click();
+    await page.locator('[data-action="clock-ampm"][data-ampm="PM"]').click();
+    assert.match(await page.locator('[data-action="clock-target"][data-which="start"]').innerText(),/7:30 PM/);
+    await page.locator('[data-action="clock-save"]').click();
+    await page.locator('[data-action="edit-range"][data-which="start"]').first()
+      .getByText('7:30 PM').waitFor();
+
     await page.locator('[data-action="clock"]').click();
-    await page.locator('.day-card').nth(1).click();
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().click();
+    await page.locator('[data-action="clock-endday"]').click();
+    assert.match(await page.locator('[data-action="clock-target"][data-which="end"]').innerText(),/24:00/);
+    await page.locator('[data-action="clock-save"]').click();
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().getByText(/24:00/).waitFor();
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().click();
+    await page.locator('.clock-number[data-value="23"]').click();
+    await page.locator('.clock-number[data-value="0"]').click();
+    await page.locator('[data-action="clock-save"]').click();
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().getByText('23:00').waitFor();
     fs.mkdirSync(path.join(process.cwd(),'preview-screens'),{recursive:true});
     for(const width of [1024,720,375,320]){
       await page.setViewportSize({width,height:800});
@@ -266,6 +349,18 @@ async function run(){
         assert.ok(details.internalScroll,'Additional windows must scroll inside the editor');
         assert.equal(details.footerVisible,true,'Review must stay visible after adding windows');
         assert.ok(details.documentHeight<=461,'Two windows must not create outer scrolling');
+        await page.locator('.editor-card').evaluate(e=>{e.scrollTop=e.scrollHeight;});
+        const scrollBefore=await page.locator('.editor-card').evaluate(e=>e.scrollTop);
+        await page.locator('[data-action="edit-range"][data-which="start"]').last().click();
+        await page.locator('.clock-number[data-value="20"]').click();
+        await page.locator('.clock-number[data-value="0"]').click();
+        await page.locator('[data-action="clock-save"]').click();
+        assert.equal(await page.locator('.clock-dialog').count(),0,
+          'A valid range closes the clock popup instead of leaving an error overlay');
+        const scrollAfter=await page.locator('.editor-card').evaluate(e=>e.scrollTop);
+        assert.ok(scrollAfter>=scrollBefore-10,
+          'Editing a lower time window should preserve internal scroll position');
+        assert.equal(await page.locator('input[type="time"]').count(),0);
         await page.screenshot({path:path.join(process.cwd(),'preview-screens',
           'weekly-activity-460-narrow-two-windows.png')});
       }
