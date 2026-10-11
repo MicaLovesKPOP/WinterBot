@@ -102,7 +102,7 @@ test('preview UI builds native components and a modal with five dropdown fields'
   for(const item of overview.components) assert.doesNotThrow(()=>item.toJSON());
   const day=UI.dayView(round,member,round.dates[0]);
   assert.equal(day.components.length,1);
-  assert.equal(UI.quickModal(round.id,[round.dates[0]],member).toJSON().components.length,5);
+  assert.equal(UI.basicHoursModal(round.id,round,member,[round.dates[0]]).toJSON().components.length,4);
   assert.equal(UI.copyModal(round.id,round,member,round.dates[0]).toJSON().components.length,1);
   const win=UI.windowModal(round.id,round.dates[0],'tentative','12');
   assert.equal(win.toJSON().components.length,5);
@@ -190,7 +190,7 @@ test('weekly editor remains the same native Components V2 surface for common edi
   await preview.handle(one.i);
   assert.ok(one.result.modal);
   assert.equal(one.result.updated,null);
-  assert.equal(one.result.modal.toJSON().components.length,5);
+  assert.equal(one.result.modal.toJSON().components.length,4);
   const fields={quick_status:['tentative'],start_h:['19'],start_m:['30'],
     end_h:['23'],end_m:['00']};
   const saved=fakeInteraction('wbux:quickwin:'+sid+':day:'+dates[0],'modal');
@@ -206,10 +206,10 @@ test('weekly editor remains the same native Components V2 surface for common edi
   assert.equal(datesSelect.result.updated,null);
   const bulkModal=fakeInteraction('wbux:quickbulk:'+sid);
   await preview.handle(bulkModal.i);
-  assert.equal(bulkModal.result.modal.toJSON().components.length,5);
+  assert.equal(bulkModal.result.modal.toJSON().components.length,4);
   const bulkFields={quick_status:['confirmed'],start_h:['18'],start_m:['00'],
     end_h:['22'],end_m:['00']};
-  const bulkSubmit=fakeInteraction('wbux:quickwin:'+sid+':multi:multi','modal');
+  const bulkSubmit=fakeInteraction(bulkModal.result.modal.toJSON().custom_id,'modal');
   bulkSubmit.i.fields={getStringSelectValues:field=>bulkFields[field]||[]};
   await preview.handle(bulkSubmit.i);
   assert.equal(bulkSubmit.result.updated.components.length,1);
@@ -253,13 +253,94 @@ test('weekly overview groups controls below their instructions with stable order
   const data=UI.overview(round,member,null).components[0].toJSON();
   const parts=data.components;
   const texts=parts.filter(c=>c.type===10).map(c=>c.content);
-  assert.ok(texts.some(s=>s.includes('Edit several days at once')));
-  assert.ok(texts.some(s=>s.includes('Or edit one day')));
+  assert.ok(texts.some(s=>s.includes('Select one or more dates to change')));
   const firstSelectIndex=parts.findIndex(c=>c.type===1&&
     c.components?.some(v=>v.custom_id?.startsWith('wbux:selectbulk:')));
-  const secondSelectIndex=parts.findIndex(c=>c.type===1&&
-    c.components?.some(v=>v.custom_id?.startsWith('wbux:jump:')));
-  assert.ok(firstSelectIndex>0&&secondSelectIndex>firstSelectIndex);
+  assert.ok(firstSelectIndex>0);
+  assert.equal(parts.filter(c=>c.type===1 && c.components?.some(v=>v.type===3)).length,1,
+    'one date selector replaces two competing date selectors');
   assert.equal(data.type,17,'single stable V2 container');
-  assert.equal(parts.filter(c=>c.type===1).length,5,'five Discord action rows maximum');
+  assert.equal(parts.filter(c=>c.type===1).length,4,'four tidy action rows instead of five');
+});
+
+
+test('one selector handles single and multiple days without useless time fields',async t=>{
+  const preview=createNativePrototype({policy,testMode:true,dataFile:temporaryFile(t)});
+  await preview.startPreview(fakeInteraction('').i);
+  const sid=Object.keys(preview.store.read().rounds)[0];
+  const dates=preview.store.read().rounds[sid].dates;
+
+  // A single date can be marked unavailable without opening any modal.
+  await preview.handle(fakeInteraction('wbux:selectbulk:'+sid+':all','select',[dates[0]]).i);
+  const unavailable=fakeInteraction('wbux:bulkfast:'+sid+':off');
+  await preview.handle(unavailable.i);
+  assert.equal(unavailable.result.modal,null);
+  assert.equal(preview.store.read().rounds[sid].members[USER_ID].draft[dates[0]].status,'unavailable');
+
+  // The ordinary hour picker requires only the four genuinely relevant fields.
+  await preview.handle(fakeInteraction('wbux:selectbulk:'+sid+':all','select',[dates[1],dates[2]]).i);
+  const hours=fakeInteraction('wbux:basic:'+sid);
+  await preview.handle(hours.i);
+  const modal=hours.result.modal.toJSON();
+  assert.equal(modal.components.length,4);
+  assert.doesNotMatch(JSON.stringify(modal),/quick_status/);
+  assert.doesNotMatch(JSON.stringify(modal),/Availability \*/);
+  assert.match(JSON.stringify(modal),/Replaces existing hours and limits/i);
+  const input=fakeInteraction(modal.custom_id,'modal');
+  const fields={start_h:['19'],start_m:['30'],end_h:['22'],end_m:['00']};
+  input.i.fields={getStringSelectValues:k=>fields[k]||[]};
+  await preview.handle(input.i);
+  assert.equal(input.result.updated.components.length,1);
+  const member=preview.store.read().rounds[sid].members[USER_ID];
+  assert.equal(member.draft[dates[1]].windows[0].start,'19:30');
+  assert.equal(member.draft[dates[2]].windows[0].end,'22:00');
+  assert.equal(member.submitted,null);
+
+  // Finishing the rest still requires a mandatory review.
+  await preview.handle(fakeInteraction('wbux:selectbulk:'+sid+':all','select',dates.slice(3)).i);
+  await preview.handle(fakeInteraction('wbux:bulkfast:'+sid+':all').i);
+  const rejected=fakeInteraction('wbux:submit:'+sid);
+  await preview.handle(rejected.i);
+  assert.match(rejected.result.replied.content,/review/);
+  const review=fakeInteraction('wbux:review:'+sid);
+  await preview.handle(review.i);
+  const reviewed=JSON.stringify(review.result.updated.components.map(c=>c.toJSON()));
+  assert.match(reviewed,/Need to correct a date/);
+  assert.equal((review.result.updated.components[0].toJSON().components||[]).filter(c=>c.type===1&&c.components?.some(v=>v.type===3)).length,1);
+  const finished=fakeInteraction('wbux:submit:'+sid);
+  await preview.handle(finished.i);
+  assert.match(JSON.stringify(finished.result.updated.components.map(c=>c.toJSON())),/Your Week · Submitted/);
+  const reOpen=fakeInteraction('wbux:open:'+sid);
+  await preview.handle(reOpen.i);
+  assert.match(JSON.stringify(reOpen.result.replied.components.map(c=>c.toJSON())),/Your Week · Submitted/);
+});
+
+test('an opened time modal saves only the originally selected dates',async t=>{
+  const preview=createNativePrototype({policy,testMode:true,dataFile:temporaryFile(t)});
+  await preview.startPreview(fakeInteraction('').i);
+  const sid=Object.keys(preview.store.read().rounds)[0];
+  const dates=preview.store.read().rounds[sid].dates;
+  await preview.handle(fakeInteraction('wbux:selectbulk:'+sid+':all','select',dates.slice(0,2)).i);
+  const modalCall=fakeInteraction('wbux:basic:'+sid);
+  await preview.handle(modalCall.i);
+  const modalId=modalCall.result.modal.toJSON().custom_id;
+  await preview.handle(fakeInteraction('wbux:selectbulk:'+sid+':all','select',dates.slice(4,6)).i);
+  const input=fakeInteraction(modalId,'modal');
+  const fields={start_h:['18'],start_m:['00'],end_h:['23'],end_m:['00']};
+  input.i.fields={getStringSelectValues:k=>fields[k]||[]};
+  await preview.handle(input.i);
+  const member=preview.store.read().rounds[sid].members[USER_ID];
+  assert.ok(member.draft[dates[0]]);
+  assert.ok(member.draft[dates[1]]);
+  assert.equal(member.draft[dates[4]],undefined);
+  assert.equal(member.draft[dates[5]],undefined);
+});
+
+test('tentative and full-day answers are unambiguous in review summaries',()=>{
+  const state=require('../src/scheduling/nativePrototypeState');
+  assert.equal(state.summary(state.allDay()),'All day');
+  assert.equal(state.summary(state.allDay('tentative')),'Tentative · All day');
+  assert.equal(state.summary(state.normalizedDay({status:'available',
+    windows:[{start:'19:30',end:'22:00',kind:'tentative'}]})),
+    'Tentative · 19:30–22:00');
 });

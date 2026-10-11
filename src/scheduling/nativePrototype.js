@@ -6,7 +6,7 @@ const { isVerifiedMember, isOrganizerMember } = require('./channelPolicy');
 const {
   PreviewStore, assert, makeRound, memberOf, normalizedDay,
   addWindow, removeWindow, allDay, applyDays, applyTemplate,
-  confirmSubmission, templateFromSubmission, reviewSnapshot, weekday,
+  confirmSubmission, templateFromSubmission, reviewSnapshot, unsubmittedChanges, weekday,
 } = require('./nativePrototypeState');
 const UI = require('./nativePrototypeUi');
 
@@ -81,7 +81,9 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
       assert(/^\d{15,22}$/.test(uid), 'Discord user ID missing.');
       if(action==='open') {
         const s=snapshot(sid,uid);
-        await interaction.reply(UI.overview(s.round,s.member,s.template));
+        await interaction.reply(s.member.submitted && !unsubmittedChanges(s.member)?
+          UI.submittedView(s.round,s.member,s.template):
+          UI.overview(s.round,s.member,s.template));
         return true;
       }
       if(action==='home') {
@@ -93,7 +95,7 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
         const date=action==='jump'?interaction.values?.[0]:a;
         const s=snapshot(sid,uid);
         assert(s.round.dates.includes(date),'Choose one of the candidate dates.');
-        await interaction.showModal(UI.quickModal(sid,[date],s.member,'day'));
+        await interaction.showModal(UI.basicHoursModal(sid,s.round,s.member,[date]));
         return true;
       }
       if(action==='day' || action==='detail') {
@@ -119,11 +121,36 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
         await interaction.deferUpdate();
         return true;
       }
-      if(action==='quickbulk') {
+      if(action==='basic' || action==='quickbulk') {
         const s=snapshot(sid,uid);
         const dates=s.member.selection.filter(d=>s.round.dates.includes(d));
-        assert(dates.length,'Select days in the overview first.');
-        await interaction.showModal(UI.quickModal(sid,dates,s.member,'multi'));
+        assert(dates.length,'Select at least one date in the weekly overview first.');
+        await interaction.showModal(UI.basicHoursModal(sid,s.round,s.member,dates));
+        return true;
+      }
+      if(action==='basicwin') {
+        const current=snapshot(sid,uid);
+        assert(/^[0-9a-f]{1,12}$/i.test(a),'Invalid date selection.');
+        const mask=BigInt('0x'+a);
+        assert(mask>0n && mask<(1n<<BigInt(current.round.dates.length)),'Invalid dates.');
+        const dates=current.round.dates.filter((_,i)=>(mask&(1n<<BigInt(i)))!==0n);
+        const field=name=>{
+          const values=interaction.fields.getStringSelectValues(name);
+          assert(Array.isArray(values)&&values.length===1,'Choose '+name+'.');
+          return values[0];
+        };
+        const start=String(Number(field('start_h'))).padStart(2,'0')+':'+field('start_m');
+        const endHour=Number(field('end_h'));
+        const end=endHour===24?'24:00':String(endHour).padStart(2,'0')+':'+field('end_m');
+        const day=normalizedDay({status:'available',windows:[{start,end,kind:'confirmed',maxMinutes:null}]});
+        const s=await change(sid,uid,(r,m)=>{
+          const previous=dates.filter(d=>m.draft[d]).length;
+          applyDays(m,r,dates,day);
+          m.lastWindow={start,end};
+          return 'Saved '+dates.length+' day(s)'+
+            (previous?' · replaced '+previous+' existing answer(s)':'')+'. Review before submitting.';
+        });
+        await respond(interaction,UI.overview(s.round,s.member,s.template,s.notice));
         return true;
       }
       if(action==='bulkfast') {
@@ -340,7 +367,9 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
           }
           throw new Error('Unsupported confirmation.');
         });
-        await respond(interaction,UI.overview(s.round,s.member,s.template,s.notice));
+        await respond(interaction,s.member.submitted && !unsubmittedChanges(s.member)?
+          UI.submittedView(s.round,s.member,s.template,s.notice):
+          UI.overview(s.round,s.member,s.template,s.notice));
         return true;
       }
       if(action==='submit') {
@@ -348,7 +377,7 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
           confirmSubmission(m,r);
           return 'Submitted! Your reviewed answers are recorded in this TEST round.';
         });
-        await respond(interaction,UI.overview(s.round,s.member,s.template,s.notice));
+        await respond(interaction,UI.submittedView(s.round,s.member,s.template,s.notice));
         return true;
       }
       throw new Error('Unknown test action.');
