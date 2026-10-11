@@ -123,6 +123,8 @@ Do not use it as an end-to-end test of the new Activity's voting interface.
   Wide layout places the week and editor in separate panes; narrow layout uses
   a single compact row of seven day cards above the editor. The Activity footer
   stays visible and the detailed editor scrolls internally for additional windows.
+  At very wide viewport sizes, the content width is capped at 900 CSS px and
+  horizontally centered rather than stretched indefinitely.
 - Review keeps its confirmation controls visible; if the complete list does not
   fit, participants must scroll to the bottom before they can submit.
 - Certainty per window is a short Available/Tentative toggle rather than an

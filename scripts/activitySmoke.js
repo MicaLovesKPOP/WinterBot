@@ -189,6 +189,11 @@ async function run(){
       await page.setViewportSize({width,height:800});
       const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
       assert.ok(overflow<=1,'Horizontal overflow at '+width+'px: '+overflow);
+      const shell=await page.locator('.app-shell').boundingBox();
+      assert.ok(Math.abs(shell.width-Math.min(width,900))<=2,
+        'Tall Activity should use the same 900px cap at '+width+'px');
+      assert.ok(Math.abs(shell.x-(width-shell.x-shell.width))<=2,
+        'Tall Activity should remain centered at '+width+'px');
       if(width===1024||width===375){
         await page.screenshot({path:path.join(process.cwd(),'preview-screens',
           width===1024?'weekly-activity-desktop.png':'weekly-activity-mobile.png'),
@@ -198,7 +203,8 @@ async function run(){
     // The real Discord Activity is about 460px tall, at widths roughly
     // 462px (narrow) to 1018px (wide). Test the actual embedded viewport,
     // not just a conventional tall mobile/desktop browser.
-    for(const [width,name] of [[1018,'wide'],[462,'narrow']]){
+    for(const [width,name] of [[1018,'wide'],[462,'narrow'],[650,'medium'],[900,'limit'],
+      [1440,'ultrawide'],[1920,'maxwide']]){
       await page.setViewportSize({width,height:460});
       const metrics=await page.evaluate(()=>{
         const rect=query=>{const el=document.querySelector(query);
@@ -212,7 +218,8 @@ async function run(){
         return {innerHeight,innerWidth,bodyHeight:document.body.scrollHeight,
           pageHeight:document.documentElement.scrollHeight,
           documentWidth:document.documentElement.scrollWidth,
-          mast:rect('.mast'),hero:rect('.hero'),week:rect('.week-section'),
+          shell:rect('.app-shell'),mast:rect('.mast'),hero:rect('.hero'),
+          week:rect('.week-section'),
           workspace:rect('.workspace'),editor:rect('.editor-card'),
           footer:rect('.action-footer'),cards,
           editorScroll:document.querySelector('.editor-card').scrollHeight,
@@ -226,6 +233,13 @@ async function run(){
       });
       assert.ok(metrics.pageHeight<=461,'Document scrolls beyond 460px in '+name+': '+JSON.stringify(metrics));
       assert.ok(metrics.documentWidth<=width+1,'Horizontal overflow in '+name);
+      // Never stretch beyond a comfortable reading width, and center the
+      // application at all supported Discord viewport widths.
+      const expectedWidth=Math.min(width,900);
+      assert.ok(Math.abs((metrics.shell.right-metrics.shell.left)-expectedWidth)<=2,
+        'Unexpected app width in '+name+': '+JSON.stringify(metrics.shell));
+      assert.ok(Math.abs(metrics.shell.left-(width-metrics.shell.right))<=2,
+        'App is not horizontally centered in '+name+': '+JSON.stringify(metrics.shell));
       assert.ok(metrics.footer?.bottom<=461&&metrics.footer?.top>=0,
         'Primary action footer hidden in '+name+': '+JSON.stringify(metrics));
       assert.equal(metrics.footerAccessible,true,
