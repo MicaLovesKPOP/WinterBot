@@ -23,6 +23,8 @@ WinterBot also includes a mobile-friendly scheduling planner that collects each 
 
 See **[SCHEDULING.md](SCHEDULING.md)** for the complete UX, rules, architecture, testing steps, opt-in live OAuth setup and limitations. The new **[channel routing and TEST mode guide](SCHEDULING_CHANNELS.md)** documents Management-only setup, default League / optional Public invitations, and safe end-to-end simulations confined to #bot-logs. The browser planner is implemented; a **separately gated test-server Discord Activity prototype** (not yet publicly verified) is documented in **[SCHEDULING_ACTIVITY_TEST_SETUP.md](SCHEDULING_ACTIVITY_TEST_SETUP.md)**. Main-guild Activity integration and live-server end-to-end verification remain future steps. For secure test-only access on DiscordBotHosting without changing its Startup Command, see **[the ngrok HTTPS setup guide](SCHEDULING_NGROK_SETUP.md)**. Do not enable `SCHEDULING_ENABLED=1` on a production server before completing live testing.
 
+**All native-message UI experiments now live in the isolated test guild's `#winterbot-testing` channel:** moderators can use `/activitytest tests`, `/activitytest preview-event` (simulated overtime/grace-period controls), and `/activitytest preview-native` (the old message-based availability comparison). They do not create real events or change permissions. See [NATIVE_DISCORD_UX_TEST.md](NATIVE_DISCORD_UX_TEST.md). The experimental `/schedule preview*` subcommands are no longer registered in the Crashday guild.
+
 ## Runtime
 
 WinterBot requires Node.js 18.20 or newer.

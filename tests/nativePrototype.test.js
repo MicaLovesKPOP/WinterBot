@@ -135,7 +135,7 @@ test('test-only Discord prototype supports a full draft, review, submit, and tem
   assert.equal(open.result.replied.flags,64|32768);
   const bad=fakeInteraction('wbux:open:'+sid,'button',[],[]);
   await preview.handle(bad.i);
-  assert.match(bad.result.replied.content,/eligible/);
+  assert.match(bad.result.replied.content,/only available to members/);
   const bulk=fakeInteraction('wbux:bulk:'+sid);
   await preview.handle(bulk.i);
   const dates=preview.store.read().rounds[sid].dates;

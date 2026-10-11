@@ -77,7 +77,8 @@ async function start(f,port){
 function fakeInteraction(type,subcommand='invite',guildId=GUILD_ID,channelId=CHANNEL_ID){
   const calls={};
   const x={
-    guildId,channelId,user:{id:USER_ID},guild:{ownerId:USER_ID},
+    guildId,channelId,user:{id:USER_ID,bot:false},guild:{ownerId:USER_ID},
+    member:{id:USER_ID,user:{id:USER_ID,bot:false}},
     memberPermissions:{has:()=>true},
     isButton:()=>type==='button',isChatInputCommand:()=>type==='command',
     commandName:'activitytest',customId:LAUNCH_ID,
@@ -89,6 +90,13 @@ function fakeInteraction(type,subcommand='invite',guildId=GUILD_ID,channelId=CHA
       return ButtonInteraction.prototype.launchActivity.call(this,opts);
     },
     async reply(data){calls.reply=data;x.replied=true;},
+    async update(data){calls.update=data;x.replied=true;},
+    async deferUpdate(){calls.deferUpdate=true;x.deferred=true;},
+    async followUp(data){calls.followUp=data;},
+    async showModal(data){calls.modal=data;},
+    async fetchReply(){return {id:'999999999999999999'};},
+    isModalSubmit:()=>type==='modal',
+    isFromMessage:()=>false,
     async deferReply(data){calls.defer=data;x.deferred=true;},
     async editReply(data){calls.edit=data;},
   };
@@ -427,4 +435,135 @@ test('Activity API preserves submitted attendance when cancelling revisions and 
     await app.stop();
     f.clean();
   }
+});
+
+
+test('all isolated test commands register only in Mica test guild, not Crashday',async()=>{
+  const f=fixture();
+  try{
+    await f.activity.start();
+    assert.equal(f.commands.length,1,'Only /activitytest is registered by the test subsystem');
+    const definitions=f.commands[0].options.map(option=>option.name);
+    assert.deepEqual(definitions,
+      ['invite','status','vote','reset','next-week','preview-native','preview-event','tests']);
+    const help=fakeInteraction('command','tests');
+    await f.activity.onInteraction(help.x);
+    assert.match(help.calls.reply.content,/preview-event/);
+    assert.match(help.calls.reply.content,/preview-native/);
+    assert.match(help.calls.reply.content,/not yet integrated/i);
+    assert.match(help.calls.reply.content,/still to build/i);
+    const wrong=fakeInteraction('command','preview-event','199916140183420928',CHANNEL_ID);
+    await f.activity.onInteraction(wrong.x);
+    assert.match(wrong.calls.reply.content,/test channel/);
+    assert.equal(Object.keys(f.activity.nativeTest.store.read().events).length,0);
+    const wrongChannel=fakeInteraction('command','preview-native',GUILD_ID,'777777777777777777');
+    await f.activity.onInteraction(wrongChannel.x);
+    assert.match(wrongChannel.calls.reply.content,/test channel/);
+    assert.equal(Object.keys(f.activity.nativeTest.store.read().rounds).length,0);
+  }finally{f.activity.stop();f.clean();}
+});
+
+test('event shutdown is a moderator-only, isolated Discord message simulation',async()=>{
+  const f=fixture();
+  try{
+    await f.activity.start();
+    const create=fakeInteraction('command','preview-event');
+    await f.activity.onInteraction(create.x);
+    assert.match(create.calls.reply.embeds[0].toJSON().title,/\[TEST\]/);
+    assert.match(create.calls.reply.embeds[0].toJSON().description,/No real event, roles, check-ins or channels/i);
+    assert.equal(f.sent.length,0,'Simulating an event does not publish into another channel');
+    const ids=Object.keys(f.activity.nativeTest.store.read().events);
+    assert.equal(ids.length,1);
+    const eid=ids[0];
+    assert.equal(f.activity.nativeTest.store.read().events[eid].graceMinutes,5);
+
+    const choose=fakeInteraction('button');
+    choose.x.customId='wbend:duration:'+eid;
+    choose.x.values=['3'];
+    await f.activity.onInteraction(choose.x);
+    assert.ok(choose.calls.update,'A private-server event duration control should update its own message');
+    assert.equal(f.activity.nativeTest.store.read().events[eid].graceMinutes,3);
+
+    const end=fakeInteraction('button');
+    end.x.customId='wbend:end:'+eid;
+    await f.activity.onInteraction(end.x);
+    assert.equal(f.activity.nativeTest.store.read().events[eid].status,'grace');
+    assert.ok(f.activity.nativeTest.store.read().events[eid].dueAt);
+
+    const unauthorized=fakeInteraction('button');
+    unauthorized.x.customId='wbend:cancel:'+eid;
+    unauthorized.x.user.id='887766554433221199';
+    unauthorized.x.guild.ownerId=USER_ID;
+    unauthorized.x.memberPermissions={has:()=>false};
+    await f.activity.onInteraction(unauthorized.x);
+    assert.match(unauthorized.calls.reply.content,/Only test moderators/i);
+    assert.equal(f.activity.nativeTest.store.read().events[eid].status,'grace');
+
+    const otherGuild=fakeInteraction('button','invite','199916140183420928',CHANNEL_ID);
+    otherGuild.x.customId='wbend:cancel:'+eid;
+    await f.activity.onInteraction(otherGuild.x);
+    assert.equal(otherGuild.calls.reply,undefined,'Other guilds cannot invoke test event controls');
+    assert.equal(f.activity.nativeTest.store.read().events[eid].status,'grace');
+
+    const cancel=fakeInteraction('button');
+    cancel.x.customId='wbend:cancel:'+eid;
+    await f.activity.onInteraction(cancel.x);
+    assert.equal(f.activity.nativeTest.store.read().events[eid].status,'running');
+    assert.equal(f.activity.store.read().rounds.length,1,
+      'Test event does not alter availability/voting round state');
+  }finally{f.activity.stop();f.clean();}
+});
+
+test('native availability comparison is open to test-channel participants but only mods create it',async()=>{
+  const f=fixture();
+  try{
+    await f.activity.start();
+    const create=fakeInteraction('command','preview-native');
+    await f.activity.onInteraction(create.x);
+    assert.match(create.calls.reply.embeds[0].toJSON().title,/\[TEST\]/);
+    assert.ok(create.calls.reply.components.length>0);
+    const rounds=Object.keys(f.activity.nativeTest.store.read().rounds);
+    assert.equal(rounds.length,1);
+    const roundId=rounds[0];
+
+    // A regular member is allowed to open the private test editor,
+    // without a Manage Guild role or any Crashday verification roles.
+    const member=fakeInteraction('button');
+    member.x.customId='wbux:open:'+roundId;
+    member.x.guild.ownerId='887766554433221199';
+    member.x.memberPermissions={has:()=>false};
+    await f.activity.onInteraction(member.x);
+    assert.equal(member.calls.reply.flags,MessageFlags.Ephemeral|MessageFlags.IsComponentsV2);
+    assert.equal(member.calls.reply.embeds,undefined);
+
+    // The same ordinary member cannot spawn or control public test events.
+    const restricted=fakeInteraction('command','preview-event');
+    restricted.x.guild.ownerId='887766554433221199';
+    restricted.x.memberPermissions={has:()=>false};
+    await f.activity.onInteraction(restricted.x);
+    assert.match(restricted.calls.reply.content,/Manage Server/i);
+
+    const botMember=fakeInteraction('button');
+    botMember.x.customId='wbux:open:'+roundId;
+    botMember.x.user.bot=true;
+    await f.activity.onInteraction(botMember.x);
+    assert.match(botMember.calls.reply.content,/only available to members/i);
+
+    const wrongChannel=fakeInteraction('button','invite',GUILD_ID,'777777777777777777');
+    wrongChannel.x.customId='wbux:open:'+roundId;
+    await f.activity.onInteraction(wrongChannel.x);
+    assert.equal(wrongChannel.calls.reply,undefined);
+    assert.equal(f.activity.store.read().rounds.length,1);
+
+    // Single reset cleans ALL test-only stores; none of the prior
+    // in-channel buttons can accidentally write into live data.
+    const reset=fakeInteraction('command','reset');
+    await f.activity.onInteraction(reset.x);
+    assert.match(reset.calls.reply.content,/No main-server data changed/i);
+    const state=f.activity.nativeTest.store.read();
+    assert.deepEqual(state.rounds,{});
+    assert.deepEqual(state.events,{});
+    assert.deepEqual(state.templates,{});
+    assert.equal(f.activity.weeklyUx.store.read().rounds.weekly.members[USER_ID],undefined);
+  }finally{f.activity.stop();f.clean();}
 });

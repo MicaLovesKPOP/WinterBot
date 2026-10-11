@@ -17,6 +17,8 @@ scheduling-demo.json
 scheduling-activity-test.json
 scheduling-activity-weekly-ux.json
 scheduling-native-preview.json
+scheduling-native-isolated-test.json
+scheduling-activity-test.json.native-preview.json
 *.corrupt.*
 preview-screens/
 

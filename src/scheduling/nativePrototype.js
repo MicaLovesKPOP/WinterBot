@@ -10,29 +10,37 @@ const {
 } = require('./nativePrototypeState');
 const UI = require('./nativePrototypeUi');
 
-function createNativePrototype({policy, testMode, dataFile, logger=console.error}) {
+function createNativePrototype({policy, testMode, dataFile, logger=console.error,
+  managerAllowed, participantAllowed, channelLabel='#bot-logs'}) {
   // Deliberate isolation: this preview cannot reach the production scheduling store.
   assert(testMode === true, 'The native UX prototype is available in scheduling TEST mode only.');
   const store = new PreviewStore(dataFile || path.join(process.cwd(),'scheduling-native-preview.json'));
-  const eventPreview = require('./nativeEventPreview').createEventPreview({store,policy,logger});
+  const mayManage=managerAllowed || (interaction=>
+    isOrganizerMember(interaction.member,policy,interaction.guild?.ownerId));
+  const mayParticipate=participantAllowed || (interaction=>
+    isVerifiedMember(interaction.member,policy)||mayManage(interaction));
+  const eventPreview = require('./nativeEventPreview').createEventPreview({
+    store,policy,logger,managerAllowed:mayManage,channelLabel,
+  });
 
   const isOwned = interaction => {
     if (!interaction.guildId || interaction.guildId !== policy.guildId ||
         interaction.channelId !== policy.logChannelId) return false;
-    return isVerifiedMember(interaction.member,policy) ||
-      isOrganizerMember(interaction.member,policy,interaction.guild?.ownerId);
+    return Boolean(interaction.member && !interaction.user?.bot &&
+      mayParticipate(interaction));
   };
 
   async function startPreview(interaction, weeksAhead=0) {
-    assert(isOrganizerMember(interaction.member,policy,interaction.guild?.ownerId),
-      'Only organizers can post the test invitation.');
-    assert(interaction.channelId===policy.logChannelId, 'Test invitations stay in #bot-logs.');
+    assert(interaction.guildId===policy.guildId &&
+      interaction.channelId===policy.logChannelId,
+      'TEST invitations stay in '+channelLabel+'.');
+    assert(mayManage(interaction),'Only test organizers can post invitations.');
     let round;
     await store.transaction(state=>{
       round=makeRound(weeksAhead);
       state.rounds[round.id]=round;
     });
-    // This is a real Discord message, but entirely inside #bot-logs.
+    // Real Discord message in the isolated test channel only.
     await interaction.reply(UI.invite(round));
     return round;
   }
@@ -74,7 +82,7 @@ function createNativePrototype({policy, testMode, dataFile, logger=console.error
   async function handle(interaction) {
     if (!String(interaction.customId||'').startsWith('wbux:')) return false;
     try {
-      assert(isOwned(interaction),'This TEST interaction is only available to eligible members in #bot-logs.');
+      assert(isOwned(interaction),'This TEST editor is only available to members in '+channelLabel+'.');
       const [prefix, action, sid, a, b, c] = interaction.customId.split(':');
       assert(prefix==='wbux' && /^[0-9a-f]{12}$/.test(sid), 'Invalid test session.');
       const uid=String(interaction.user.id);

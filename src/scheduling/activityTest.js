@@ -66,7 +66,8 @@ function same(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 function createActivityTest({ client, clientId, clientSecret, sessionSecret,
-  dataFile, weeklyDataFile, fetchImpl = globalThis.fetch, now = () => new Date() }) {
+  dataFile, weeklyDataFile, nativeDataFile, fetchImpl = globalThis.fetch,
+  now = () => new Date() }) {
   assert(client && typeof client.guilds?.fetch === 'function', 'Discord bot client is required.');
   assert(/^\d{15,22}$/.test(String(clientId || '')), 'A valid Discord application ID is required.');
   assert(clientSecret && typeof clientSecret === 'string', 'Discord client secret is required.');
@@ -77,7 +78,24 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
   store.initialize();
   const weeklyUx=createActivityWeeklyUx({dataFile:weeklyDataFile||
     (dataFile ? dataFile+'.weekly-ux.json' : path.join(process.cwd(),'scheduling-activity-weekly-ux.json')),now});
+  const testPolicy={guildId:GUILD_ID,logChannelId:CHANNEL_ID,
+    managementRoleId:null,verifiedRoleIds:[]};
+  const isTestModerator=interaction=>Boolean(
+    interaction?.user && !interaction.user.bot && (
+      interaction.guild?.ownerId===interaction.user.id ||
+      interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
+    ));
+  const nativeTest=require('./nativePrototype').createNativePrototype({
+    policy:testPolicy,testMode:true,
+    dataFile:nativeDataFile||(dataFile?
+      dataFile+'.native-preview.json':
+      path.join(process.cwd(),'scheduling-native-isolated-test.json')),
+    channelLabel:'#winterbot-testing',
+    managerAllowed:isTestModerator,
+    participantAllowed:interaction=>Boolean(interaction.member&&!interaction.user?.bot),
+  });
   let initialized = false;
+  let eventTimer = null;
 
   const sign = data => crypto.createHmac('sha256', sessionSecret).update(data).digest('base64url');
   const cookieHeader = user => {
@@ -280,8 +298,11 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       .addSubcommand(x => x.setName('invite').setDescription('Post a private-server Activity test invitation'))
       .addSubcommand(x => x.setName('status').setDescription('Check whether Discord has enabled the test Activity'))
       .addSubcommand(x => x.setName('vote').setDescription('Close test availability and open a test ballot'))
-      .addSubcommand(x => x.setName('reset').setDescription('Reset isolated Activity test data'))
-      .addSubcommand(x => x.setName('next-week').setDescription('Start the next test week, keeping personal templates'));
+      .addSubcommand(x => x.setName('reset').setDescription('Reset all isolated WinterBot test data'))
+      .addSubcommand(x => x.setName('next-week').setDescription('Start the next test week, keeping personal templates'))
+      .addSubcommand(x => x.setName('preview-native').setDescription('Try the older native Discord availability editor'))
+      .addSubcommand(x => x.setName('preview-event').setDescription('Try event overtime and graceful shutdown controls'))
+      .addSubcommand(x => x.setName('tests').setDescription('Show available and planned WinterBot tests'));
   }
   function launchButton() {
     return new ActionRowBuilder().addComponents(new ButtonBuilder()
@@ -289,6 +310,19 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       .setLabel('Open availability planner in Discord'));
   }
   async function onInteraction(interaction) {
+    // Only the isolated test-server handler owns wbux/wbend component IDs.
+    if (interaction.guildId===GUILD_ID &&
+        interaction.channelId===CHANNEL_ID &&
+        String(interaction.customId||'').startsWith('wbux:')) {
+      await nativeTest.handle(interaction);
+      return;
+    }
+    if (interaction.guildId===GUILD_ID &&
+        interaction.channelId===CHANNEL_ID &&
+        String(interaction.customId||'').startsWith('wbend:')) {
+      await nativeTest.eventPreview.handle(interaction);
+      return;
+    }
     if (interaction.isButton?.() && interaction.customId === LAUNCH_ID) {
       if (interaction.guildId !== GUILD_ID || interaction.channelId !== CHANNEL_ID ||
         interaction.message?.author?.id !== client.user.id) {
@@ -331,8 +365,7 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
     try {
       assert(interaction.guildId === GUILD_ID && interaction.channelId === CHANNEL_ID,
         'This command works only in the WinterBot test channel.', 403);
-      const owner = interaction.guild?.ownerId === interaction.user.id;
-      assert(owner || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild),
+      assert(isTestModerator(interaction),
         'Manage Server permission is required for test setup.', 403);
       const option = interaction.options.getSubcommand();
       if (option === 'status') {
@@ -356,8 +389,13 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       if (option === 'reset') {
         await store.transaction(data => { data.rounds = []; });
         await weeklyUx.reset();
+        await nativeTest.store.transaction(state=>{
+          state.rounds={};
+          state.events={};
+          state.templates={};
+        });
         await ensureRound();
-        await interaction.reply({ content: 'Isolated Activity test data reset. No main-server data changed.',
+        await interaction.reply({ content: 'All isolated WinterBot test data reset (Activity, native preview and simulated event). No main-server data changed.',
           flags: MessageFlags.Ephemeral });
         return;
       }
@@ -365,6 +403,33 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
         const week=await weeklyUx.advanceWeek();
         await interaction.reply({content:'Started the next test week: '+week.dates[0]+' to '+week.dates.at(-1)+
           '. Your saved usual-week templates remain available.',flags:MessageFlags.Ephemeral});
+        return;
+      }
+      if (option === 'preview-native') {
+        await nativeTest.startPreview(interaction);
+        return;
+      }
+      if (option === 'preview-event') {
+        await nativeTest.eventPreview.start(interaction);
+        return;
+      }
+      if (option === 'tests') {
+        await interaction.reply({
+          content:'**WinterBot · isolated test server**\n\n' +
+            '**Ready to test:**\n' +
+            '• /activitytest invite — weekly availability Activity\n' +
+            '• /activitytest preview-event — simulated overtime / grace-period controls\n' +
+            '• /activitytest preview-native — older native-message availability editor\n' +
+            '• /activitytest next-week — test template reuse\n' +
+            '• /activitytest status — Activity status\n' +
+            '• /activitytest reset — clear ONLY isolated test data\n\n' +
+            '**Legacy logic test:** /activitytest vote — needs feasible sample candidates; ' +
+            'not yet integrated with the new weekly Activity.\n\n' +
+            '**Still to build:** the polished organizer wizard, end-to-end voting, ' +
+            'check-in, participant role unlocking and event channel lifecycle. ' +
+            'No test here creates real events or alters member permissions.',
+          flags:MessageFlags.Ephemeral,allowedMentions:{parse:[]},
+        });
         return;
       }
       const round = await ensureRound();
@@ -434,14 +499,20 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
     await weeklyUx.read('000000000000000001');
     await guild.commands.create(command().toJSON());
     client.on('interactionCreate', onInteraction);
+    eventTimer=setInterval(()=>nativeTest.eventPreview.tick(client)
+      .catch(error=>console.error('Isolated TEST event countdown:',error)),10000);
+    eventTimer.unref?.();
     initialized = true;
   }
   function stop() {
     if (initialized) client.off('interactionCreate', onInteraction);
+    if(eventTimer)clearInterval(eventTimer);
+    eventTimer=null;
     initialized = false;
   }
   return {
-    handle, start, stop, store, weeklyUx, ensureRound, publicRound, onInteraction,
+    handle, start, stop, store, weeklyUx, nativeTest,
+    ensureRound, publicRound, onInteraction,
     get testIds() { return {guildId:GUILD_ID,channelId:CHANNEL_ID}; },
     get origin() { return origin; },
   };

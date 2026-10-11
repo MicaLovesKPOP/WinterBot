@@ -26,7 +26,7 @@ function eventPanel(event) {
     .setTitle('[TEST] Game Night — '+(running?'In Progress':grace?'Wrapping Up':'Ended'))
     .setDescription(status+'\n\nGrace period: **'+event.graceMinutes+' minute(s)**.'+
       '\n\nNo real event, roles, check-ins or channels are affected.')
-    .setFooter({text:'TEST ONLY | Bot logs channel'})];
+    .setFooter({text:'TEST ONLY | No real roles, events or channels'})];
   const components=[];
   if(running) {
     components.push(row(new StringSelectMenuBuilder()
@@ -56,12 +56,14 @@ function eventPanel(event) {
   return {embeds,components,allowedMentions:{parse:[]}};
 }
 
-function createEventPreview({store,policy,logger=console.error}) {
+function createEventPreview({store,policy,logger=console.error,
+  managerAllowed,channelLabel='#bot-logs'}) {
+  const mayManage=managerAllowed || (interaction=>
+    isOrganizerMember(interaction.member,policy,interaction.guild?.ownerId));
   function assertManager(interaction) {
     assert(interaction.guildId===policy.guildId && interaction.channelId===policy.logChannelId,
-      'Event lifecycle previews only run in #bot-logs.');
-    assert(isOrganizerMember(interaction.member,policy,interaction.guild?.ownerId),
-      'Only moderators can control the event.');
+      'Event lifecycle tests only run in '+channelLabel+'.');
+    assert(mayManage(interaction),'Only test moderators can control the event.');
   }
   async function start(interaction) {
     assertManager(interaction);

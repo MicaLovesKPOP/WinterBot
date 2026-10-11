@@ -1,62 +1,78 @@
-# WinterBot native scheduling UX pilot
+# WinterBot native Discord controls - isolated test guild
 
-This is an isolated, test-only Discord-components prototype.
-It does not create real Discord events, channels, roles, or registrations.
+The native-message UX and simulated event-shutdown prototypes are now
+registered **only in Mica's private WinterBot test server**. They no longer
+register experimental /schedule subcommands in the Crashday guild.
 
-## Start
+- Test guild: 818423564901416991
+- Test channel: #winterbot-testing (1558470955930755162)
+- Boot prerequisites: SCHEDULING_ACTIVITY_TEST_ENABLED=1 with the existing
+  opt-in scheduling TEST-mode configuration.
+- Test records are stored separately from all main-server scheduling data.
+- No real Discord Scheduled Events, check-ins, roles, channels, permissions,
+  or registrations are created by these prototypes.
 
-Run these commands as a moderator in #bot-logs while the scheduler is in TEST mode:
+## Launch
 
-    /schedule preview
-    /schedule preview-event
+As the test-server owner or a moderator with Manage Server permissions,
+use the following commands **in #winterbot-testing**:
 
-Both commands are absent in normal scheduling mode.
-The first command posts a seven-day invitation with a private availability editor.
-The second posts a fake event and moderator graceful-shutdown controls.
+    /activitytest tests
+    /activitytest preview-event
+    /activitytest preview-native
 
-## Availability interaction test (one date selector)
+The new /activitytest tests command shows available and planned tests.
+The preferred availability editor remains /activitytest invite (the Activity).
+Use preview-native only to compare native message-based editing with the Activity.
 
-The weekly overview is a persistent Components V2 panel. There is now only
-ONE date selector: choose a single date or multiple dates, then choose Available
-Hours, All Day or Unavailable. Changing selection does not redraw the message.
+Any private test-channel member can open the native availability invitation and
+edit their own ephemeral draft. Only test moderators can post invitations or
+operate the simulated event-ending controls. Interaction IDs from another
+guild/channel are ignored. The private native drafts live in a separate
+scheduling-native-isolated-test.json file (or under the test fixture's native
+store path) and are never consumed by the production optimizer.
 
-1. Open the private weekly overview from the invitation.
-2. Select Monday, Tuesday and Thursday, then use Available Hours. The modal has
-   FOUR relevant dropdowns (start/end hour/minute), not five; no separate
-   status selector. Existing answers are replaced, with Undo available.
-3. Select one date and choose Unavailable. It applies immediately: no needless
-   time dropdowns, no modal. Likewise All Day.
-4. More Day Tools gives access to additional confirmed/tentative windows,
-   maximum-stay limits and Copy to Days from the source date.
-5. Try the 12h/24h clock, five-minute precision and Undo Last Edit.
-6. Review all answers in the dedicated review stage. The review keeps a date
-   selector for quick corrections and stays closer to the overview width.
-7. Confirm & Submit, which now shows a distinct submitted receipt rather than
-   silently returning to the editing view.
-8. Reopen the same invitation or save My Usual Week. Previously submitted
-   answers stay active until revisions are reviewed and submitted again.
+## Event lifecycle preview
 
-This UI simplification does not change the core scheduler. The modal warning
-about sharing sensitive information is supplied by Discord itself, not by
-WinterBot, and cannot be removed by the bot. Discord still requires a server
-round-trip for each control. Desktop/mobile usability testing is essential.
+The /activitytest preview-event command creates a simulated control message.
+Try the grace-period selector (0, 1, 2, 3, 5 default, 10, 15 minutes), start
+ending the event, extend by 1/5 minutes, cancel ending, or confirm End Now.
+A timer updates the simulated event to Closed when the deadline expires.
+No Discord Scheduled Event or event channel is created or deleted.
 
-## Grace-period interaction test
+## Older native availability comparison
 
-The grace options are 0, 1, 2, 3, 5, 10 and 15 minutes.
-The default is 5 minutes. There is no 30-minute option.
-Test start, extend, cancel and immediate closure. The timer closes the fake event.
+The /activitytest preview-native command posts a seven-day test invitation
+with a private Discord Components V2 editor.
 
-## Scope boundary
+1. Open the test message with the private-editor button.
+2. Select one or more days; set hours, All Day or Unavailable.
+3. Add confirmed/tentative windows, and copy from a completed source date.
+4. Review the entire week before confirming a TEST submission.
+5. Try a saved usual week and a revised submission.
 
-All test data is isolated in scheduling-native-preview.json.
-Production availability, voting and registration are unchanged.
-Actual check-in, event roles and channel access are future integration work.
-Owner defaults and advanced organizer settings also await hands-on UX feedback.
+The Activity remains the primary, more polished availability interface.
 
-## Verify
+## Existing isolated commands
+
+- /activitytest invite: current Discord embedded Activity for availability.
+- /activitytest next-week: move its test week forward; keep personal templates.
+- /activitytest status: checks Discord Activity configuration.
+- /activitytest vote: separate legacy scheduling/vote algorithm test, **not**
+  connected to the new Activity's submitted weekly availability.
+- /activitytest reset: resets all **isolated** Activity, native and simulated
+  event test stores. Old test invitation/event buttons become obsolete.
+
+## Planned (NOT available yet)
+
+A polished organizer setup flow, attendance-result presentation, participant
+voting end to end, check-ins, event-role unlocking, temporary text/voice
+channels and moderator-only archives. Build/validate these here before any
+real-server integration.
+
+## Verification
 
     npm ci
     npm test
 
-Do not manually bump package or lockfile versions.
+Do not manually bump package.json or package-lock.json versions.
