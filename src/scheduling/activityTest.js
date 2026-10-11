@@ -66,8 +66,8 @@ function same(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 function createActivityTest({ client, clientId, clientSecret, sessionSecret,
-  dataFile, weeklyDataFile, nativeDataFile, fetchImpl = globalThis.fetch,
-  now = () => new Date() }) {
+  dataFile, weeklyDataFile, nativeDataFile, journeyDataFile,
+  fetchImpl = globalThis.fetch,now = () => new Date() }) {
   assert(client && typeof client.guilds?.fetch === 'function', 'Discord bot client is required.');
   assert(/^\d{15,22}$/.test(String(clientId || '')), 'A valid Discord application ID is required.');
   assert(clientSecret && typeof clientSecret === 'string', 'Discord client secret is required.');
@@ -93,6 +93,16 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
     channelLabel:'#winterbot-testing',
     managerAllowed:isTestModerator,
     participantAllowed:interaction=>Boolean(interaction.member&&!interaction.user?.bot),
+  });
+  const nativeJourney=require('./nativeJourney').createNativeJourney({
+    client,guildId:GUILD_ID,channelId:CHANNEL_ID,
+    dataFile:journeyDataFile||(dataFile?
+      dataFile+'.journey-test.json':
+      path.join(process.cwd(),'scheduling-private-journey-test.json')),
+    now,
+    // Read-only until the participant explicitly reviews and confirms import.
+    // The Activity's original reviewed submission remains unchanged.
+    activityAvailability:userId=>weeklyUx.read(userId),
   });
   let initialized = false;
   let eventTimer = null;
@@ -302,6 +312,9 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       .addSubcommand(x => x.setName('next-week').setDescription('Start the next test week, keeping personal templates'))
       .addSubcommand(x => x.setName('preview-native').setDescription('Try the older native Discord availability editor'))
       .addSubcommand(x => x.setName('preview-event').setDescription('Try event overtime and graceful shutdown controls'))
+      .addSubcommand(x => x.setName('organizer').setDescription('Create and manage a complete TEST planning round'))
+      .addSubcommand(x => x.setName('results').setDescription('Inspect the latest TEST attendance results'))
+      .addSubcommand(x => x.setName('checkin').setDescription('Inspect TEST event check-in and channel access'))
       .addSubcommand(x => x.setName('tests').setDescription('Show available and planned WinterBot tests'));
   }
   function launchButton() {
@@ -310,6 +323,11 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       .setLabel('Open availability planner in Discord'));
   }
   async function onInteraction(interaction) {
+    if(interaction.guildId===GUILD_ID&&interaction.channelId===CHANNEL_ID&&
+        String(interaction.customId||'').startsWith('wbflow:')){
+      await nativeJourney.handle(interaction);
+      return;
+    }
     // Only the isolated test-server handler owns wbux/wbend component IDs.
     if (interaction.guildId===GUILD_ID &&
         interaction.channelId===CHANNEL_ID &&
@@ -394,6 +412,7 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
           state.events={};
           state.templates={};
         });
+        await nativeJourney.reset();
         await ensureRound();
         await interaction.reply({ content: 'All isolated WinterBot test data reset (Activity, native preview and simulated event). No main-server data changed.',
           flags: MessageFlags.Ephemeral });
@@ -403,6 +422,18 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
         const week=await weeklyUx.advanceWeek();
         await interaction.reply({content:'Started the next test week: '+week.dates[0]+' to '+week.dates.at(-1)+
           '. Your saved usual-week templates remain available.',flags:MessageFlags.Ephemeral});
+        return;
+      }
+      if(option === 'organizer'){
+        await nativeJourney.start(interaction);
+        return;
+      }
+      if(option === 'results'){
+        await nativeJourney.results(interaction);
+        return;
+      }
+      if(option === 'checkin'){
+        await nativeJourney.checkinView(interaction);
         return;
       }
       if (option === 'preview-native') {
@@ -416,18 +447,22 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       if (option === 'tests') {
         await interaction.reply({
           content:'**WinterBot · isolated test server**\n\n' +
-            '**Ready to test:**\n' +
-            '• /activitytest invite — weekly availability Activity\n' +
-            '• /activitytest preview-event — simulated overtime / grace-period controls\n' +
-            '• /activitytest preview-native — older native-message availability editor\n' +
-            '• /activitytest next-week — test template reuse\n' +
+            '**Complete native-message journey (TEST ONLY):**\n' +
+            '• /activitytest organizer — organizer setup, invitation, attendance and voting\n' +
+            '• /activitytest results — ranked suggestions and ballot controls\n' +
+            '• /activitytest checkin — simulated event check-in, role/channel access and ending\n\n' +
+            '**Other tests:**\n' +
+            '• /activitytest invite — weekly availability Activity (separate test dataset)\n' +
+            '• /activitytest preview-event — standalone overtime/grace-period simulation\n' +
+            '• /activitytest preview-native — old native-message availability comparison\n' +
+            '• /activitytest next-week — Activity template reuse\n' +
             '• /activitytest status — Activity status\n' +
-            '• /activitytest reset — clear ONLY isolated test data\n\n' +
-            '**Legacy logic test:** /activitytest vote — needs feasible sample candidates; ' +
-            'not yet integrated with the new weekly Activity.\n\n' +
-            '**Still to build:** the polished organizer wizard, end-to-end voting, ' +
-            'check-in, participant role unlocking and event channel lifecycle. ' +
-            'No test here creates real events or alters member permissions.',
+            '• /activitytest reset — wipe ONLY isolated test stores\n\n' +
+            '**Existing legacy vote test:** /activitytest vote is separate from the new ' +
+            'integrated journey and from the calendar Activity.\n\n' +
+            '**Safety:** the new journey reuses real optimization/vote rules, but check-in, ' +
+            'roles, channels and event shutdown are previews. Nothing grants permissions, ' +
+            'creates channels or publishes a real Discord Scheduled Event.',
           flags:MessageFlags.Ephemeral,allowedMentions:{parse:[]},
         });
         return;
@@ -499,8 +534,10 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
     await weeklyUx.read('000000000000000001');
     await guild.commands.create(command().toJSON());
     client.on('interactionCreate', onInteraction);
-    eventTimer=setInterval(()=>nativeTest.eventPreview.tick(client)
-      .catch(error=>console.error('Isolated TEST event countdown:',error)),10000);
+    eventTimer=setInterval(()=>Promise.all([
+      nativeTest.eventPreview.tick(client),
+      nativeJourney.tick(),
+    ]).catch(error=>console.error('Isolated TEST event countdown:',error)),10000);
     eventTimer.unref?.();
     initialized = true;
   }
@@ -511,7 +548,7 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
     initialized = false;
   }
   return {
-    handle, start, stop, store, weeklyUx, nativeTest,
+    handle, start, stop, store, weeklyUx, nativeTest,nativeJourney,
     ensureRound, publicRound, onInteraction,
     get testIds() { return {guildId:GUILD_ID,channelId:CHANNEL_ID}; },
     get origin() { return origin; },

@@ -87,7 +87,9 @@ Missing or incorrect optional scheduling configuration must never crash the ordi
 
 ## Embedded Discord Activity work
 
-This branch implements the responsive browser planner, authenticated backend, slash-command setup links, channel presentation, permissions and test mode. It does **not** yet merge the separately developed Discord Embedded App SDK Activity launcher. The Activity should reuse these server-side restrictions rather than trust client-supplied roles or destinations.
+The responsive browser planner, test-only Embedded App SDK calendar Activity, and connected **private-server native Discord journey** are all present. The Activity remains scoped to the existing `#winterbot-testing` guild/channel and its own authenticated test store. The native journey calls the real optimizer/voting core but simulates event check-in and role/channel access without touching Discord permissions. See `SCHEDULING_ACTIVITY_TEST_SETUP.md` and `NATIVE_JOURNEY_TEST.md`.
+
+These testing interfaces do **not** make the organizer planner production-ready: connecting Activity data with core rounds, reconciling 5- vs 15-minute precision and tentative availability, and opt-in real test-server channel-role lifecycle verification are still required.
 
 ## Verification and rollback
 
@@ -99,4 +101,4 @@ Tests cover role checks, Mod vs #bot-logs command gating, date and hour limits, 
 
 To stop testing, set SCHEDULING_TEST_MODE=0 and restart the bot. The old test rounds remain archived in the data but inactive. To disable scheduling entirely, set SCHEDULING_ENABLED=0 and restart. These changes never delete existing Discord Scheduled Events.
 
-The old uncommitted Discord Activity prototype was discarded at the user's request. The live #bot-logs scheduling test uses Discord slash commands and a responsive browser planner; an embedded Discord Activity is a separate future feature.
+Earlier standalone Activity experiments were superseded by the **currently working private test-server Activity**. The old /schedule preview commands were moved out of the Crashday guild into /activitytest, alongside a newly connected native organizer/attendance/voting simulation. Neither preview creates real event channels, roles, or Scheduled Events.

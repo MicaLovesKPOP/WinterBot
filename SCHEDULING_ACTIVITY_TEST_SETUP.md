@@ -96,11 +96,27 @@ Run these as the test-server owner or a member with Manage Server permission.
 
 All experimental **Discord message-based** controls now live here too:
 - **/activitytest tests** explains the available tests and what remains planned.
+- **/activitytest organizer** starts the connected organizer → invitation →
+  attendance → optional vote → simulated event/check-in Discord-message flow.
+- **/activitytest results** opens the most recent test planning results.
+- **/activitytest checkin** inspects the latest simulated event role and
+  channel-access lifecycle.
 - **/activitytest preview-event** simulates moderator event overtime, a grace
   period and shutdown; it never creates or deletes real event channels.
 - **/activitytest preview-native** posts the older private, native-message
   availability UX for side-by-side comparison with the Activity.
 - **/activitytest invite** launches the preferred embedded calendar Activity.
+
+**IMPORTANT:** The connected native test journey and the calendar Activity
+have separate test data by default. A participant can use **Import reviewed
+Activity week** on the organizer's invitation to preview and explicitly
+confirm transferring their already-submitted availability to that round.
+The conversion conservatively rounds confirmed periods inward to the
+existing **15-minute** optimizer and excludes tentative periods from
+confirmed-attendance calculations. The Activity submission remains unchanged.
+The journey's check-in, channels, event role, grace and archives are
+**simulated** and do not modify Discord permissions.
+See NATIVE_JOURNEY_TEST.md for the full walkthrough and integration limits.
 
 After a WinterBot restart, the old **/schedule preview** and
 **/schedule preview-event** commands will no longer be registered in the
