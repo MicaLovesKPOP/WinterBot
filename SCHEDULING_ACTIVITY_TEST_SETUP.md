@@ -17,8 +17,12 @@ It cannot create real Discord Scheduled Events and cannot post to League/Public.
 - You need Manage Server permission there (or be its owner).
 - Unverified Activities can launch only in servers with **fewer than 25 members**,
   by the application developer, team members, or authorized Activity testers.
-- The current test HTTPS address remains:
-  https://pension-aground-bullpen.ngrok-free.dev
+- The Activity's STATIC frontend is hosted at GitHub Pages (no ngrok warning):
+  https://micaloveskpop.github.io/WinterBot/
+- The existing test-only JSON API continues through the ngrok tunnel:
+  https://pension-aground-bullpen.ngrok-free.dev/activity/api/config
+- The repository's GitHub Pages deployment must have succeeded (from the
+  "Deploy Activity Test UI" GitHub Actions workflow).
 - The existing Discord OAuth2 client ID, client secret and 32+ character
   scheduling session secret must already be configured in DiscordBotHosting.
 
@@ -30,19 +34,32 @@ WinterBot application**. Do not create or rotate bot tokens.
 1. Under **OAuth2 → Redirects**, add https://127.0.0.1 if absent, for the
    Embedded App SDK's OAuth flow. Retain the existing ngrok /oauth/callback.
    Discord handles the Activity OAuth redirect without navigating there.
-2. Under **Activities → URL Mappings**, add this mapping:
-   - **Prefix:** /
-   - **Target:** pension-aground-bullpen.ngrok-free.dev/activity/
-   - There is NO https:// in the target. It is a directory. This should
-     route the Activity's root, CSS, JavaScript and API calls through the
-     existing HTTPS tunnel to WinterBot's isolated Activity endpoints.
-3. Under **Activities → Settings**, turn on **Enable Activities** and
-   enable desktop/web (and mobile for testing). Save changes.
-4. Leave the app private and unverified while we test.
+2. Under **Activities → URL Mappings**, REMOVE the old mapping
+   **/ → pension-aground-bullpen.ngrok-free.dev/activity/** and replace it
+   with these two mappings IN THIS ORDER:
 
-If the portal rejects a directory target, **do not substitute the plain
-ngrok hostname**, as that would open the old browser planner instead.
-Share the mapping-screen error so we can switch to a dedicated HTTPS origin.
+   | Prefix | Target (no https://) |
+   | --- | --- |
+   | **/api** | **pension-aground-bullpen.ngrok-free.dev/activity/api/** |
+   | **/** | **micaloveskpop.github.io/WinterBot/** |
+
+   The **/api** mapping MUST appear above **/**. Discord applies the first
+   matching prefix and a misplaced /** will shadow the API mapping.
+
+   The static Activity HTML, JavaScript and CSS are now served by GitHub Pages,
+   avoiding ngrok's forced browser-warning response. The API requests add the
+   ngrok-skip-browser-warning header and remain OAuth/session authenticated.
+   Both targets are DIRECTORIES and must omit https://.
+3. Under **Activities → Settings**, keep **Enable Activities** enabled and
+   enable desktop/web (and mobile when testing). Save changes.
+4. Keep the app private/unverified while testing. Do not post this invitation
+   to the main Crashday server.
+
+IMPORTANT: the old one-mapping configuration causes a white/blank Activity!
+The Discord proxy receives the free ngrok warning (HTTP 200 text/plain)
+instead of HTML/JS/CSS. Retrying, restarting and CSS edits do not fix it.
+If GitHub Pages is temporarily 404, wait for its deployment workflow to finish
+before launching the Activity.
 
 Discord docs:
 - https://docs.discord.com/developers/activities/building-an-activity

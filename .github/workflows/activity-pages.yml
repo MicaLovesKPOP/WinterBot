@@ -1,0 +1,62 @@
+name: Deploy Activity Test UI
+
+# The files served through Discord's Activity proxy are static and require no
+# credentials. Serve them from GitHub Pages instead of the free ngrok tunnel,
+# whose browser interstitial replaces HTML/CSS/JS with a warning response.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/activity-pages.yml'
+      - 'src/scheduling/activity-client/**'
+      - 'src/scheduling/activity-public/**'
+      - 'scripts/buildActivity.js'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: activity-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build public Activity files
+        run: npm run build:activity
+      - name: Cache-bust CSS and JS for Discord's asset proxy
+        run: |
+          node -e "const fs=require('node:fs');const p='src/scheduling/activity-public/index.html';let html=fs.readFileSync(p,'utf8');for(const name of ['styles.css','activity.js'])html=html.replace('./'+name,'./'+name+'?v='+process.env.GITHUB_SHA);fs.writeFileSync(p,html);"
+      - name: Verify that the committed client bundle matches the source
+        run: node --test --test-name-pattern="compiled Activity bundle stays synchronized" tests/activityTest.test.js
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload static Activity
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: src/scheduling/activity-public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy static Activity
+        id: deployment
+        uses: actions/deploy-pages@v4

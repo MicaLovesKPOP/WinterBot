@@ -342,7 +342,8 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
           content: enabled
             ? 'Discord reports that WinterBot Activities are ENABLED. ' +
               'If the launch button fails, check Activities → URL Mappings in the Developer Portal. ' +
-              'The expected test mapping is / → pension-aground-bullpen.ngrok-free.dev/activity/.'
+              'Expected mappings: /api → pension-aground-bullpen.ngrok-free.dev/activity/api/; ' +
+              '/ → micaloveskpop.github.io/WinterBot/. Place /api above /.'
             : 'Discord reports that WinterBot Activities are NOT ENABLED. ' +
               'In the Developer Portal, configure Activities → URL Mappings, ' +
               'then turn on Activities → Settings → Enable Activities. ' +
