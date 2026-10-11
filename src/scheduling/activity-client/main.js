@@ -16,6 +16,7 @@ let saving=false;
 let saveTimer=null;
 let dirty=new Map();
 let reviewReady=false;
+let reviewSeenBottom=false;
 let errorSaving=false;
 let preferenceClock='24';
 
@@ -154,7 +155,9 @@ function dayCards(){
       kind==='off'?'Unavailable':'Not set';
     return '<button type="button" class="day-card state-'+kind+
       (isActive?' is-active':'')+chosenClass+'" data-action="pick-day" data-date="'+date+
-      '" aria-pressed="'+(multi?chosenHere:isActive)+'">'+
+      '" aria-pressed="'+(multi?chosenHere:isActive)+
+      '" aria-label="'+esc(datestring(date)+': '+status)+
+      '" title="'+esc(datestring(date)+': '+status)+'">'+
       '<div class="day-head"><span>'+esc(day)+'</span><span class="day-mark">'+mark+'</span></div>'+
       '<strong>'+esc(n)+'</strong><span class="day-status">'+status+'</span></button>';
   }).join('');
@@ -163,10 +166,11 @@ function weekCard(){
   return '<section class="week-section" aria-label="Weekly dates">'+
     '<div class="section-title"><div><p class="eyebrow">STEP 1</p><h2>Your week</h2></div>'+
     '<div class="week-actions">'+
-    (model.template?makeButton('Reuse usual week','reuse','minor'):'')+
-    makeButton(preferenceClock==='24'?'24-hour clock':'12-hour clock','clock','minor')+
+    (model.template?makeButton('Reuse','reuse','minor','title="Apply your saved usual week" aria-label="Reuse usual week"'):'')+
+    makeButton(preferenceClock==='24'?'24h':'12h','clock','minor',
+      'aria-label="'+(preferenceClock==='24'?'24-hour clock':'12-hour clock')+'"')+
     '<button class="text-button'+(multi?' active':'')+'" data-action="multi" type="button">'+
-    (multi?'✓ Multi-select on':'Select multiple days')+'</button></div></div>'+
+    (multi?'✓ Selecting':'Select days')+'</button></div></div>'+
     '<div class="week-grid">'+dayCards()+'</div>'+
     (multi?'<p class="small-note">'+chosen.size+' day(s) selected. Pick the days you want to edit together.</p>':'')+
     '</section>';
@@ -207,15 +211,14 @@ function durationOptions(current){
 function windowEditor(date,day,index,w){
   return '<article class="range-row"><div class="range-top">'+
     '<div class="range-tag">'+(w.kind==='tentative'?'Tentative hours':'Available hours')+'</div>'+
+    '<div class="range-actions">'+
+    makeButton(w.kind==='tentative'?'Mark available':'Mark tentative','toggle-kind','minor',
+      'data-index="'+index+'" aria-label="Change certainty for window '+(index+1)+'"')+
     '<button type="button" class="icon-button" data-action="remove-window" data-index="'+index+'" aria-label="Remove window '+(index+1)+'">Remove</button>'+
-    '</div><div class="range-grid">'+
+    '</div></div><div class="range-grid">'+
     '<div class="field"><label>From</label>'+timeInput(date,index,'start',w.start)+'</div>'+
     '<div class="field"><label>Until</label>'+timeInput(date,index,'end',w.end)+'</div>'+
-    '<div class="field"><label>Certainty</label><select data-date="'+date+'" data-index="'+index+'" data-field="kind">'+
-    '<option value="confirmed"'+(w.kind==='confirmed'?' selected':'')+'>Available</option>'+
-    '<option value="tentative"'+(w.kind==='tentative'?' selected':'')+'>Tentative</option>'+
-    '</select></div>'+
-    '<div class="field"><label>Maximum stay</label><select data-date="'+date+'" data-index="'+index+
+    '<div class="field"><label>Max. stay</label><select data-date="'+date+'" data-index="'+index+
     '" data-field="maxMinutes">'+durationOptions(w.maxMinutes)+'</select></div></div></article>';
 }
 function singleEditor(){
@@ -291,8 +294,9 @@ function reviewPage(){
     '<p class="hint">Check every day and time before submitting. Only a confirmed submission counts.</p>'+
     '<div class="review-list">'+rows+'</div>'+
     (!full?'<p class="warning-text">'+(dates.length-answered)+' unanswered day(s). Finish them before submitting.</p>':'')+
+    '<p class="review-scroll-hint" data-role="review-scroll" hidden>Scroll through all dates to enable submission.</p>'+
     '<div class="bottom-actions">'+makeButton('Back to editing','back','outline')+
-    makeButton('Confirm & submit','submit','primary',full&&!errorSaving&&!dirty.size&&reviewReady&&!saving?'':'disabled')+
+    makeButton('Confirm & submit','submit','primary',full&&!errorSaving&&!dirty.size&&reviewReady&&!saving&&reviewSeenBottom?'':'disabled')+
     '</div></section>';
 }
 function donePage(){
@@ -349,7 +353,7 @@ function render(){
   if(!model)return;
   const oldY=window.scrollY;
   const content=view==='review'?reviewPage():view==='done'?donePage():
-    weekCard()+(multi?batchEditor():singleEditor());
+    '<div class="workspace">'+weekCard()+(multi?batchEditor():singleEditor())+'</div>';
   root.innerHTML='<main class="app-shell">'+stageHeader()+
     (notice?'<div class="message '+(noticeError?'danger':'')+'" role="status">'+esc(notice)+'</div>':'')+
     content+
@@ -362,6 +366,23 @@ function render(){
     '<div class="privacy-note">TEST ONLY · Your answers stay in the isolated WinterBot testing system.</div>'+
     popupHtml()+'</main>';
   window.scrollTo(0,oldY);
+  if(view==='review')setupReviewScroll();
+}
+function setupReviewScroll(){
+  const list=root.querySelector('.review-list');
+  if(!list)return;
+  const update=()=>{
+    const overflows=list.scrollHeight>list.clientHeight+2;
+    if(!overflows||list.scrollTop+list.clientHeight>=list.scrollHeight-3)
+      reviewSeenBottom=true;
+    const hint=root.querySelector('[data-role="review-scroll"]');
+    if(hint)hint.hidden=!overflows||reviewSeenBottom;
+    const submit=root.querySelector('[data-action="submit"]');
+    if(submit)submit.disabled=!model.round.dates.every(dayEntry)||
+      errorSaving||dirty.size>0||saving||!reviewReady||!reviewSeenBottom;
+  };
+  list.addEventListener('scroll',update,{passive:true});
+  update();
 }
 function refreshSaveLabel(){
   const labelNode=root.querySelector('[data-role="save"]');
@@ -459,7 +480,7 @@ function freeWindow(day){
   throw Error('No free time remains on this day. Adjust an existing range.');
 }
 async function openReview(){
-  view='review';reviewReady=false;notice='';render();
+  view='review';reviewReady=false;reviewSeenBottom=false;notice='';render();
   try{
     await flushAll();
     await request('ux/review',{confirmReview:true});
@@ -542,6 +563,13 @@ function onClick(event){
       result.windows.push(freeWindow(result));
       changeDay(selectedDay,result);return;
     }
+    if(action==='toggle-kind'){
+      const day=copy(dayEntry(selectedDay));
+      const w=day?.windows[Number(element.dataset.index)];
+      if(!w)throw Error('That time window is no longer available.');
+      w.kind=w.kind==='tentative'?'confirmed':'tentative';
+      changeDay(selectedDay,day);return;
+    }
     if(action==='remove-window'){
       const day=copy(dayEntry(selectedDay));
       day.windows.splice(Number(element.dataset.index),1);
@@ -568,9 +596,9 @@ function onClick(event){
     }
     if(action==='review'){openReview();return;}
     if(action==='review-edit'){
-      view='week';multi=false;selectedDay=element.dataset.date;reviewReady=false;render();return;
+      view='week';multi=false;selectedDay=element.dataset.date;reviewReady=false;reviewSeenBottom=false;render();return;
     }
-    if(action==='back'){view='week';reviewReady=false;render();return;}
+    if(action==='back'){view='week';reviewReady=false;reviewSeenBottom=false;render();return;}
     if(action==='submit'){submit();return;}
     if(action==='retry'){flushAll().catch(actionError);return;}
     if(action==='clock'){
