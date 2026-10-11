@@ -100,9 +100,18 @@ Run these as the test-server owner or a member with Manage Server permission:
    confirmed/tentative choice on each time range. Time editing now uses a custom
    **clock-face range picker** instead of browser scrolling dropdowns:
    - Click From or Until to open one small range picker with both endpoints.
-   - Tap an hour (in 24h mode: 01–12 outer ring / 13–00 inner ring); the
-     dial automatically advances to 5-minute steps.
-   - In 12h mode, use the normal 1–12 dial plus the AM/PM toggle.
+   - Tap **or hold and drag** around the clock face (mouse or touch); the
+     hand/time preview follows continuously as you consider different values.
+     Only releasing the pointer finishes that choice.
+   - The dial follows the familiar four-step sequence automatically:
+     **From hour → From minutes → Until hour → Until minutes**. Selecting
+     minutes on From advances to Until immediately; no extra tab tap needed.
+     After Until minutes, **Apply range** remains mandatory.
+   - In 24h mode: 01–12 on the outer hour ring / 13–00 on the inner ring,
+     followed by five-minute positions around the minute dial.
+   - In 12h mode, use the normal 1–12 ring plus the AM/PM toggle.
+   - Manual From/Until and Hour/Minute tabs stay available for fine-tuning.
+     Cancelling a drag restores its provisional value without saving.
    - Select End of day (24:00) only for the Until endpoint.
    - Apply both times together. Invalid/overlapping ranges display an error
      in the picker without saving a partially edited day.

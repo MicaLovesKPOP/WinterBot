@@ -384,9 +384,10 @@ function clockPopupHtml(p) {
       '<span class="clock-hint">24-hour clock</span>')+'</div>'+
     dialFace(p)+
     '<div class="clock-bottom-line">'+
-    '<span>'+(p.stage==='hour'&&preferenceClock==='24'?
-      'Hours: 01–12 outer ring, 13–00 inner ring':
-      p.stage==='hour'?'Choose the hour on the dial':'Minutes: 5-minute steps')+'</span>'+
+    '<span>'+(p.completed?'Range chosen · Apply when ready':
+      p.stage==='hour'&&preferenceClock==='24'?
+      'Drag · 01–12 outer, 13–00 inner':
+      p.stage==='hour'?'Drag or tap an hour':'Drag or tap minutes · 5-minute steps')+'</span>'+
     (p.which==='end'?makeButton('End of day','clock-endday',
       p.end==='24:00'?'selected':'','title="Set the end to 24:00"'):'')+
     '</div>'+
@@ -411,19 +412,133 @@ function openClockPicker(element) {
   };
   render();
 }
-function chooseOnClock(value) {
-  if(!popup||popup.type!=='clock')return;
-  const p=popup;
+function setClockDialValue(p,value) {
   const current=p[p.which]==='24:00'?'23:00':p[p.which];
   let hour=Number(current.slice(0,2)),minute=Number(current.slice(3));
-  if(p.stage==='hour'){
+  if(p.stage==='hour')
     hour=preferenceClock==='24'?value:(value%12)+(hour>=12?12:0);
-    p.stage='minute';
-  }else minute=value;
+  else minute=value;
   p[p.which]=clock(hour*60+minute);
+  p.completed=false;
   p.error='';
+}
+function advanceClockStep(p) {
+  // A complete range takes four choices, without manual tab switching.
+  if(p.stage==='hour')p.stage='minute';
+  else if(p.which==='start'){
+    p.which='end';
+    p.stage='hour';
+  }else{
+    // Keep the selected end minutes visible for fine-tuning. Never submit
+    // automatically: Apply range remains an explicit confirmation.
+    p.completed=true;
+  }
+}
+function completeClockChoice() {
+  if(!popup||popup.type!=='clock')return;
+  advanceClockStep(popup);
+  redrawClockOnly();
+  if(popup.completed)root.querySelector('.clock-dialog [data-action="clock-save"]')?.focus();
+}
+function chooseOnClock(value) {
+  if(!popup||popup.type!=='clock')return;
+  setClockDialValue(popup,value);
+  completeClockChoice();
+}
+// Pointer capture makes the dial behave like a native clock: you can hold
+// the mouse/touch down and sweep across numbers until you release. While
+// dragging, update the hand and displayed time IN PLACE, never replacing the
+// element that owns pointer capture.
+let activeClockPointer=null;
+let lastClockPointerRelease=-Infinity;
+function clockValueAtPointer(face,event) {
+  const rect=face.getBoundingClientRect();
+  // Normalize coordinates so CSS-transformed/smaller faces work identically.
+  const x=(event.clientX-rect.left)/rect.width*220-110;
+  const y=(event.clientY-rect.top)/rect.height*220-110;
+  const radius=Math.hypot(x,y);
+  const fraction=((Math.atan2(y,x)+Math.PI/2+2*Math.PI)%(2*Math.PI))/(2*Math.PI);
+  const sector=Math.round(fraction*12)%12;
+  if(popup.stage==='minute')return sector*5;
+  if(preferenceClock==='12')return sector||12;
+  return radius<72?(sector===0?0:sector+12):(sector||12);
+}
+function updateClockPreview() {
+  const p=popup,face=root.querySelector('.clock-face');
+  if(!face||p?.type!=='clock')return;
+  const shown=p[p.which]==='24:00'?'23:00':p[p.which];
+  const hour=Number(shown.slice(0,2)),minute=Number(shown.slice(3));
+  const selectedValue=p.stage==='minute'?minute:
+    preferenceClock==='12'?(hour%12||12):hour;
+  const selected=face.querySelector('.clock-number[data-value="'+selectedValue+'"]');
+  for(const item of face.querySelectorAll('.clock-number')){
+    const isActive=item===selected;
+    item.classList.toggle('selected',isActive);
+    item.setAttribute('aria-pressed',String(isActive));
+  }
+  if(selected){
+    const hand=face.querySelector('.clock-hand');
+    hand?.setAttribute('x2',String(parseFloat(selected.style.left)));
+    hand?.setAttribute('y2',String(parseFloat(selected.style.top)));
+  }
+  const tab=root.querySelector('.clock-time-tab[data-which="'+p.which+'"] strong');
+  if(tab)tab.textContent=formatTime(p[p.which]);
+  // AM/PM might change while crossing the 12/24-hour boundary.
+  for(const option of root.querySelectorAll('.clock-ampm [data-ampm]')){
+    const active=(hour<12?'AM':'PM')===option.dataset.ampm;
+    option.classList.toggle('active',active);
+  }
+}
+function clockPointerDown(event) {
+  if(!popup||popup.type!=='clock'||event.button>0||activeClockPointer)return;
+  const face=event.target.closest('.clock-face');
+  if(!face||!root.contains(face))return;
+  event.preventDefault();
+  activeClockPointer={
+    id:event.pointerId,face,original:popup[popup.which],
+    which:popup.which,stage:popup.stage,
+  };
+  try{face.setPointerCapture(event.pointerId);}catch{
+    // Synthetic pointer events used by accessibility tooling may not have
+    // native capture; document-level pointer listeners still receive them.
+  }
+  setClockDialValue(popup,clockValueAtPointer(face,event));
+  updateClockPreview();
+}
+function clockPointerMove(event) {
+  const drag=activeClockPointer;
+  if(!drag||drag.id!==event.pointerId||popup?.type!=='clock')return;
+  event.preventDefault();
+  setClockDialValue(popup,clockValueAtPointer(drag.face,event));
+  updateClockPreview();
+}
+function clockPointerUp(event) {
+  const drag=activeClockPointer;
+  if(!drag||drag.id!==event.pointerId)return;
+  if(popup?.type!=='clock'){activeClockPointer=null;return;}
+  event.preventDefault();
+  // The same pointer-up completes tap OR drag, advancing only AFTER release.
+  setClockDialValue(popup,clockValueAtPointer(drag.face,event));
+  try{
+    if(drag.face.hasPointerCapture(event.pointerId))
+      drag.face.releasePointerCapture(event.pointerId);
+  }catch{}
+  activeClockPointer=null;
+  lastClockPointerRelease=performance.now();
+  completeClockChoice();
+}
+function clockPointerCancel(event) {
+  const drag=activeClockPointer;
+  if(!drag||drag.id!==event.pointerId)return;
+  if(popup?.type==='clock'){
+    popup[drag.which]=drag.original;
+    popup.which=drag.which;
+    popup.stage=drag.stage;
+  }
+  activeClockPointer=null;
   redrawClockOnly();
 }
+
 function saveClockRange(){
   if(!popup||popup.type!=='clock')return;
   const p=popup;
@@ -697,24 +812,30 @@ function onClick(event){
     if(popup?.type==='clock'){
       if(action==='clock-target'){
         popup.which=element.dataset.which;
-        popup.stage='hour';popup.error='';
+        popup.stage='hour';popup.error='';popup.completed=false;
         redrawClockOnly();return;
       }
       if(action==='clock-stage'){
         popup.stage=element.dataset.stage;
+        popup.completed=false;
         redrawClockOnly();return;
       }
-      if(action==='clock-choice'){chooseOnClock(Number(element.dataset.value));return;}
+      if(action==='clock-choice'){
+        // Mouse/touch pointer-up already chose and advanced the clock. Ignore
+        // its subsequent synthesized click, but preserve keyboard clicks.
+        if(event.detail>0 && performance.now()-lastClockPointerRelease<500)return;
+        chooseOnClock(Number(element.dataset.value));return;
+      }
       if(action==='clock-ampm'){
         const current=popup[popup.which]==='24:00'?'23:00':popup[popup.which];
         const h=Number(current.slice(0,2))%12;
         popup[popup.which]=clock((element.dataset.ampm==='PM'?12:0)*60+h*60+
           Number(current.slice(3)));
-        popup.error='';redrawClockOnly();return;
+        popup.error='';popup.completed=false;redrawClockOnly();return;
       }
       if(action==='clock-endday'){
         popup.end='24:00';popup.which='end';popup.stage='hour';
-        popup.error='';redrawClockOnly();return;
+        popup.error='';popup.completed=true;redrawClockOnly();return;
       }
       if(action==='clock-save'){saveClockRange();return;}
     }
@@ -811,6 +932,10 @@ function onChange(event){
 function keydown(event){
   if(event.key==='Escape'&&popup){popup=null;render();}
 }
+root.addEventListener('pointerdown',clockPointerDown);
+root.addEventListener('pointermove',clockPointerMove);
+root.addEventListener('pointerup',clockPointerUp);
+root.addEventListener('pointercancel',clockPointerCancel);
 root.addEventListener('click',onClick);
 root.addEventListener('change',onChange);
 document.addEventListener('keydown',keydown);
