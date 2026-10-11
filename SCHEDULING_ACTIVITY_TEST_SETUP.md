@@ -96,9 +96,13 @@ Run these as the test-server owner or a member with Manage Server permission:
 1. Run **/activitytest invite**. This posts a fresh invitation only to the test channel.
 2. Click **Open availability planner in Discord**. This launches the embedded Activity,
    NOT a browser link. The new prototype opens a familiar seven-day calendar.
-3. Click a day card. Try **Available hours**, **All day**, **Unavailable**, and the
-   confirmed/tentative choice on each time range. Time editing now uses a custom
-   **clock-face range picker** instead of browser scrolling dropdowns:
+3. Click a day card. Press the large **+ Add availability** placeholder.
+   This opens the clock without inserting any predetermined hours. The clock
+   starts with **From --:-- / Until --:--**, and Apply remains disabled until a
+   complete valid range is selected. Once you've added a window, use the
+   **+ Add another time window** placeholder beneath it. The day header,
+   availability actions and timeline stay fixed while only the time-window
+   list scrolls.
    - Click From or Until to open one small range picker with both endpoints.
    - Tap **or hold and drag** around the clock face (mouse or touch); the
      hand/time preview follows continuously as you consider different values.
@@ -109,7 +113,11 @@ Run these as the test-server owner or a member with Manage Server permission:
      After Until minutes, **Apply range** remains mandatory.
    - In 24h mode: 01–12 on the outer hour ring / 13–00 on the inner ring,
      followed by five-minute positions around the minute dial.
-   - In 12h mode, use the normal 1–12 ring plus the AM/PM toggle.
+   - Within the clock dialog, the checked/unchecked **24-hour clock** option
+     switches between 24h and 12h; in 12h mode use the 1–12 ring and AM/PM.
+   - Hours outside moderator-defined daily limits or conflicting with other
+     saved windows are disabled/grayed. Restrictions are enforced on the backend.
+   - Selecting 00:00 for **Until** means 24:00 (end of selected day).
    - Manual From/Until and Hour/Minute tabs stay available for fine-tuning.
      Cancelling a drag restores its provisional value without saving.
    - Select End of day (24:00) only for the Until endpoint.
@@ -118,11 +126,16 @@ Run these as the test-server owner or a member with Manage Server permission:
    - The exact same picker is used when configuring multiple days at once.
    Try extra windows and optional duration limits. Editing responds locally;
    the saved-draft indicator reflects remote persistence.
-4. Turn on **Select multiple days**, pick several days, configure common hours, and
-   apply. Existing answers get an overwrite preview before replacement.
+4. Use the full-width **Single day / Multiple days** mode control below the
+   weekly calendar. Select multiple days, choose their common availability
+   (or All permitted hours / Unavailable), and apply. Existing answers get
+   a green/yellow/red overwrite preview before replacement.
 5. Use **Copy this day** to copy all its windows to chosen dates.
-6. Choose **Review week**. The final submission is disabled until all seven dates
-   are answered and the latest changes have saved. Submit explicitly.
+6. Choose **Review week**. Every date shows a small green (confirmed), yellow
+   (tentative), or red (unavailable) timeline plus the exact times. Tentative
+   windows read e.g. "19:00–22:00 (tentative)". The final submission is
+   disabled until all seven dates are answered, latest changes are saved
+   and the review has been inspected. Submit explicitly.
 7. Save your submitted answers as your usual week. Run **/activitytest next-week** to
    start another seven-day round while preserving templates, relaunch and choose
    **Reuse usual week**. Review and correct exceptions before submitting again.

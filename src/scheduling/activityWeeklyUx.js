@@ -10,6 +10,13 @@ const {
   isComplete,assert,
 }=require('./nativePrototypeState');
 
+function toMinute(value){
+  if(value==='24:00')return 1440;
+  assert(typeof value==='string'&&/^([01]\d|2[0-3]):[0-5]\d$/.test(value),
+    'Invalid allowed-hours restriction.');
+  const [h,m]=value.split(':').map(Number);
+  return h*60+m;
+}
 function createActivityWeeklyUx({dataFile,now=()=>new Date()}={}) {
   const file=dataFile||path.join(process.cwd(),'scheduling-activity-weekly-ux.json');
   const store=new PreviewStore(file);
@@ -19,6 +26,18 @@ function createActivityWeeklyUx({dataFile,now=()=>new Date()}={}) {
     const dt=base?DateTime.fromISO(base).setZone('Europe/Amsterdam').plus({days:1}):
       DateTime.fromJSDate(now()).setZone('Europe/Amsterdam');
     return makeRound(0,dt);
+  }
+  function assertAllowed(round,date,day){
+    const limits=round.allowedHoursByDate?.[date];
+    if(day?.status!=='available'||!limits)return;
+    const allowed=(Array.isArray(limits)?limits:[limits]).map(w=>({
+      start:toMinute(w.start),end:toMinute(w.end),
+    }));
+    for(const w of day.windows){
+      const start=toMinute(w.start),end=toMinute(w.end);
+      assert(allowed.some(l=>start>=l.start&&end<=l.end),
+        'Availability must remain inside the allowed hours for '+date+'.');
+    }
   }
   async function ensureWeek(){
     if(store.read().rounds[key]) return;
@@ -31,7 +50,8 @@ function createActivityWeeklyUx({dataFile,now=()=>new Date()}={}) {
     return {
       sandbox:true,
       round:{id:round.id,title:'Weekly Game Night',dates:[...round.dates],
-        timezone:round.timezone},
+        timezone:round.timezone,
+        allowedHoursByDate:structuredClone(round.allowedHoursByDate||{})},
       member:{draft:structuredClone(m.draft||{}),
         submitted:structuredClone(m.submitted||null),
         submittedAt:m.submittedAt||null,clockFormat:m.clockFormat||'24'},
@@ -61,6 +81,7 @@ function createActivityWeeklyUx({dataFile,now=()=>new Date()}={}) {
           let day=null;
           if(change.status!=='unanswered'&&change.status!==null)
             day=normalizedDay(change);
+          assertAllowed(round,change.date,day);
           applyDays(member,round,[change.date],day);
         }
       } else if(action==='review') {
@@ -68,6 +89,7 @@ function createActivityWeeklyUx({dataFile,now=()=>new Date()}={}) {
         member.reviewedSnapshot=reviewSnapshot(round,member);
       } else if(action==='submit') {
         assert(body.confirm===true,'Explicit confirmation is required.');
+        for(const date of round.dates)assertAllowed(round,date,member.draft[date]);
         confirmSubmission(member,round);
       } else if(action==='template-save') {
         assert(body.confirm===true,'Confirm the weekly template update.');
@@ -75,6 +97,7 @@ function createActivityWeeklyUx({dataFile,now=()=>new Date()}={}) {
       } else if(action==='template-apply') {
         assert(body.confirm===true,'Confirm before applying your usual week.');
         applyTemplate(member,round,state.templates[userId]);
+        for(const date of round.dates)assertAllowed(round,date,member.draft[date]);
       } else if(action==='preference') {
         assert(body.clock==='12'||body.clock==='24','Clock format must be 12h or 24h.');
         member.clockFormat=body.clock;
