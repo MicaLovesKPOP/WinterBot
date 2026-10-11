@@ -61,10 +61,10 @@ function dateMultiSelect(op,round,member,exclude=null) {
 function overview(round,member,template,notice='') {
   const answered=round.dates.filter(d=>member.draft[d]).length;
   const changed=member.submitted&&unsubmittedChanges(member);
-  const state=member.submitted ?
-    changed?'**Draft changes** · Your previous submission is still active.':
-      '**Submitted** · Your answers are saved.':
-      '**Draft only** · Nothing has been submitted.';
+  const state=member.submitted?
+    changed?'**Unsubmitted changes** · Your previous submission is still active.':
+      '**Submitted** · You can make a revised submission.':
+      '**Draft** · Your answers are not submitted yet.';
   const selected=member.selection.filter(d=>round.dates.includes(d));
   const container=new ContainerBuilder().setAccentColor(BLUE)
     .addTextDisplayComponents(display('## Your Week · '+fmt(round.dates[0])+' – '+fmt(round.dates.at(-1))))
@@ -72,15 +72,13 @@ function overview(round,member,template,notice='') {
   if(notice) container.addTextDisplayComponents(display('**'+notice+'**'));
   container
     .addTextDisplayComponents(display(allLines(round,member.draft,member.clockFormat)))
-    .addTextDisplayComponents(display('**Edit several days at once**\nFirst select dates (you can select several), then choose Hours, All Day or Unavailable.'))
+    .addTextDisplayComponents(display('**Select one or more dates to change**\nThen choose an action below. One date works exactly like multiple dates.'))
     .addActionRowComponents(row(dateMultiSelect('selectbulk',round,member)))
     .addActionRowComponents(row(
-      button(key('quickbulk',round.id),'Choose Hours',ButtonStyle.Primary),
+      button(key('basic',round.id),'Available Hours',ButtonStyle.Primary),
       button(key('bulkfast',round.id,'all'),'All Day',ButtonStyle.Success),
-      button(key('bulkfast',round.id,'off'),'Unavailable',ButtonStyle.Secondary)
-    ))
-    .addTextDisplayComponents(display('**Or edit one day**\nChoose a date to open its editor.'))
-    .addActionRowComponents(row(datePicker('jump',round.id,round,'Choose a day to edit')));
+      button(key('bulkfast',round.id,'off'),'Unavailable')
+    ));
   const main=[
     button(key('review',round.id),'Review & Submit',ButtonStyle.Success),
     button(key('tools',round.id),'More Day Tools')
@@ -135,7 +133,8 @@ function dayView(round,member,date,notice='') {
     button(key('day',round.id,round.dates[idx+1]||date),'Next →',ButtonStyle.Secondary,idx===round.dates.length-1)
   ));
   return panel(label(date),'**Current answer**\n'+details(day,member.clockFormat)+
-    '\n\nAdd more windows when you need separate confirmed and tentative hours. '+
+    '\n\n**Set/Replace Hours** replaces this date’s existing windows and duration limits. '+
+    'Use **Add Available/Tentative Window** to keep the other windows. '+
     'Changes stay in your draft until final review.',controls,BLUE,notice);
 }
 function multiView(round,member,source=null,notice='') {
@@ -186,19 +185,33 @@ function reviewView(round,member) {
   const missing=round.dates.filter(d=>!member.draft[d]);
   const altered=member.submitted?round.dates.filter(d=>
     JSON.stringify(member.draft[d])!==JSON.stringify(member.submitted[d])):[];
-  const body='These are the exact answers you are about to submit.\n\n'+
+  const body='**Check every day before confirming.**\n\n'+
     allLines(round,member.draft,member.clockFormat)+
-    (altered.length?'\n\n**Changes since last submission:** '+altered.map(fmt).join(', '):'')+
+    (altered.length?'\n\n**Changed since last submission:** '+altered.map(fmt).join(', '):'')+
     (missing.length?'\n\n**Unanswered:** '+missing.map(fmt).join(', ')+
-      '\nAnswer these before submitting.':'\n\n**All dates answered.**');
-  const controls=[row(
-    button(key('submit',round.id),'Confirm & Submit',ButtonStyle.Success,missing.length>0),
-    button(key('home',round.id),'Back to Week')
-  )];
-  if(missing.length)controls.push(row(
-    button(key('quickdate',round.id,missing[0]),'Edit First Unanswered',ButtonStyle.Primary)
-  ));
-  return panel('Review & Submit',body,controls,missing.length?YELLOW:GREEN);
+      '\nPlease answer these dates before submitting.':'\n\n**'+round.dates.length+' of '+round.dates.length+' dates answered.**');
+  const controls=[
+    row(datePicker('detail',round.id,round,'Need to correct a date? Select it here')),
+    row(
+      button(key('submit',round.id),'Confirm & Submit',ButtonStyle.Success,missing.length>0),
+      button(key('home',round.id),'Back to Editing')
+    )
+  ];
+  return panel('Your Week · Review & Submit',body,controls,missing.length?YELLOW:GREEN);
+}
+function submittedView(round,member,template,notice='') {
+  const body='**Your reviewed availability has been submitted.**\n'+
+    'The answers below are recorded for this TEST scheduling round.\n\n'+
+    allLines(round,member.submitted,member.clockFormat)+
+    '\n\nYou can still edit and resubmit your availability during the collection period.';
+  const controls=[
+    row(datePicker('detail',round.id,round,'Change a submitted date')),
+    row(
+      button(key('home',round.id),'Make Changes',ButtonStyle.Primary),
+      button(key('template',round.id),template?'Update My Usual Week':'Save as My Usual Week')
+    )
+  ];
+  return panel('Your Week · Submitted',body,controls,GREEN,notice);
 }
 function hourOptions(format,end=false) {
   return Array.from({length:end?25:24},(_,i)=>({
@@ -230,6 +243,27 @@ function timeLabels(existing,format) {
     labelled('End hour',pick('end_h',hourOptions(format,true),numericHour(end))),
     labelled('End minute',pick('end_m',minuteOptions(),end.slice(3))),
   ];
+}
+// A compact, immutable date snapshot in the modal ID prevents a later
+// dropdown selection from changing which dates the open form will modify.
+function selectionMask(round,dates) {
+  let mask=0n;
+  for(const date of dates) {
+    const index=round.dates.indexOf(date);
+    if(index<0) throw new Error('Choose a valid date.');
+    mask|=1n<<BigInt(index);
+  }
+  return mask.toString(16);
+}
+function basicHoursModal(sid,round,member,dates) {
+  const previous=dates.length===1?member.draft[dates[0]]?.windows?.[0]:null;
+  const defaults=previous||member.lastWindow||null;
+  const fields=timeLabels(defaults,member.clockFormat||'24');
+  fields[0].setDescription('Confirmed availability. Replaces existing hours and limits on '+dates.length+' date(s).');
+  return new ModalBuilder()
+    .setCustomId(key('basicwin',sid,selectionMask(round,dates)))
+    .setTitle(dates.length===1?'Available Hours · '+fmt(dates[0]):'Available Hours · '+dates.length+' Days')
+    .addLabelComponents(...fields);
 }
 function quickModal(sid,dates,member,mode='day') {
   const isDay=mode==='day',date=isDay?dates[0]:null;
@@ -298,6 +332,6 @@ function invite(round) {
   };
 }
 module.exports={
-  key,privatePayload,panel,overview,dayView,dayTools,multiView,pendingView,reviewView,
-  quickModal,windowModal,copyModal,invite,summary,fmt,label,details,
+  key,privatePayload,panel,overview,dayView,dayTools,multiView,pendingView,reviewView,submittedView,
+  quickModal,basicHoursModal,selectionMask,windowModal,copyModal,invite,summary,fmt,label,details,
 };

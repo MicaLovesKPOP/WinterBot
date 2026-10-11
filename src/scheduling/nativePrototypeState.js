@@ -73,9 +73,12 @@ function displayTime(value,format='24') {
 function summary(day,format='24') {
   if (!day) return 'Not answered';
   if (day.status === 'unavailable') return 'Unavailable';
-  return day.windows.map(w =>
-    (w.kind === 'tentative' ? '?' : '') + displayTime(w.start,format)+'-'+displayTime(w.end,format)+
-    (w.maxMinutes ? ' (max ' + w.maxMinutes + 'm)' : '')).join(', ');
+  return day.windows.map(w => {
+    const isAllDay=w.start==='00:00'&&w.end==='24:00';
+    const hours=isAllDay?'All day':displayTime(w.start,format)+'–'+displayTime(w.end,format);
+    const certainty=w.kind==='tentative'?'Tentative · ':'';
+    return certainty+hours+(w.maxMinutes?' (max '+w.maxMinutes+' min)':'');
+  }).join(' · ');
 }
 function startOfDemoWeek(weeksAhead = 0, now = DateTime.now()) {
   assert(Number.isInteger(weeksAhead) && weeksAhead >= 0 && weeksAhead <= 8, 'Week offset must be 0-8.');

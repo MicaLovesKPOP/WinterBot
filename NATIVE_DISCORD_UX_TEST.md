@@ -14,29 +14,32 @@ Both commands are absent in normal scheduling mode.
 The first command posts a seven-day invitation with a private availability editor.
 The second posts a fake event and moderator graceful-shutdown controls.
 
-## Availability interaction test (redesigned week-first editor)
+## Availability interaction test (one date selector)
 
-The overview is one consistent Components V2 panel. The normal path does NOT
-replace the whole page whenever you choose a date. The native modal opens
-directly. The message only redraws when you actually save an answer or open
-the final review.
+The weekly overview is a persistent Components V2 panel. There is now only
+ONE date selector: choose a single date or multiple dates, then choose Available
+Hours, All Day or Unavailable. Changing selection does not redraw the message.
 
 1. Open the private weekly overview from the invitation.
-2. Under Edit several days, select multiple dates. Choosing dates acknowledges
-   without redrawing the message. Then choose Hours to open one modal, or use
-   the All Day / Unavailable quick actions for the selected dates.
-3. Under Edit one day, select a date. The time editor opens immediately in a
-   Discord modal. Choose Available, Tentative, All Day or Unavailable.
-4. More Day Tools gives access to extra time windows, duration caps and Copy to
-   Days, available only from the selected source date's detail view.
-5. Try 12-hour and 24-hour clocks, five-minute precision, and Undo.
-6. Review all dates before submitting; missing days block submission.
-7. Edit a submitted response; the old submission stays active until re-reviewed.
-8. Save My Usual Week, then reuse it in a new round.
+2. Select Monday, Tuesday and Thursday, then use Available Hours. The modal has
+   FOUR relevant dropdowns (start/end hour/minute), not five; no separate
+   status selector. Existing answers are replaced, with Undo available.
+3. Select one date and choose Unavailable. It applies immediately: no needless
+   time dropdowns, no modal. Likewise All Day.
+4. More Day Tools gives access to additional confirmed/tentative windows,
+   maximum-stay limits and Copy to Days from the source date.
+5. Try the 12h/24h clock, five-minute precision and Undo Last Edit.
+6. Review all answers in the dedicated review stage. The review keeps a date
+   selector for quick corrections and stays closer to the overview width.
+7. Confirm & Submit, which now shows a distinct submitted receipt rather than
+   silently returning to the editing view.
+8. Reopen the same invitation or save My Usual Week. Previously submitted
+   answers stay active until revisions are reviewed and submitted again.
 
-Expected improvement: ordinary multi-day edits need far fewer message redraws
-and interface changes than the original pilot. Native Discord interactions
-still involve network latency; real desktop/mobile testing remains necessary.
+This UI simplification does not change the core scheduler. The modal warning
+about sharing sensitive information is supplied by Discord itself, not by
+WinterBot, and cannot be removed by the bot. Discord still requires a server
+round-trip for each control. Desktop/mobile usability testing is essential.
 
 ## Grace-period interaction test
 
