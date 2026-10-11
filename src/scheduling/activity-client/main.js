@@ -19,6 +19,11 @@ let reviewReady=false;
 let reviewSeenBottom=false;
 let errorSaving=false;
 let preferenceClock='24';
+let templateDraft={};
+let templateReturnView='week';
+let templateOrigin='blank';
+let templateSeenBottom=false;
+let templateBusy=false;
 
 const icon={
   check:'✓', unsure:'?', off:'×', empty:'·', arrow:'›', copy:'⧉',
@@ -51,7 +56,19 @@ function weekday(date){
   return new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',weekday:'long'})
     .format(new Date(date+'T12:00:00Z'));
 }
-function dayEntry(date){return model.member.draft[date]||null;}
+function inTemplate(){return view==='template'||view==='template-review';}
+function draftForWeekdays(source){
+  const answers={};
+  if(!source)return answers;
+  for(const date of model.round.dates){
+    const day=source[date]||source[weekday(date)];
+    if(day)answers[date]=copy(day);
+  }
+  return answers;
+}
+function dayEntry(date){return (inTemplate()?templateDraft:model.member.draft)[date]||null;}
+function hasRevision(){return Boolean(model?.member?.submitted&&
+  JSON.stringify(model.member.draft)!==JSON.stringify(model.member.submitted));}
 function copy(value){return structuredClone(value);}
 function validateDay(raw){
   if(!raw||raw.status==='unanswered')return null;
@@ -77,7 +94,7 @@ function allDay(kind='confirmed'){
   return {status:'available',windows:[{kind,start:'00:00',end:'24:00',maxMinutes:null}]};
 }
 function allPermittedDay(date,kind='confirmed'){
-  const limits=model?.round?.allowedHoursByDate?.[date];
+  const limits=inTemplate()?null:model?.round?.allowedHoursByDate?.[date];
   if(!limits)return allDay(kind);
   const ranges=Array.isArray(limits)?limits:[limits];
   return validateDay({status:'available',windows:ranges.map(w=>({
@@ -104,6 +121,7 @@ function makeButton(text,action,cls='',extra=''){
   return '<button type="button" class="button '+cls+'" data-action="'+action+'" '+extra+'>'+esc(text)+'</button>';
 }
 function saveLabel(){
+  if(inTemplate())return 'Template changes not saved yet';
   if(errorSaving)return 'Could not save · Retry';
   if(saving||dirty.size)return 'Saving draft…';
   return model?.member?.submittedAt?'Draft saved':'Saved as draft';
@@ -111,6 +129,12 @@ function saveLabel(){
 function setAlert(value,isError=false){notice=value;noticeError=isError;render();}
 function changeDay(date,day,renderNow=true){
   const normalized=validateDay(day);
+  if(inTemplate()){
+    if(normalized)templateDraft[date]=normalized;
+    else delete templateDraft[date];
+    if(renderNow)render();
+    return;
+  }
   if(normalized)model.member.draft[date]=normalized;
   else delete model.member.draft[date];
   model.progress.reviewed=false;
@@ -121,6 +145,15 @@ function changeDay(date,day,renderNow=true){
   if(renderNow)render();
 }
 function changeDays(changes){
+  if(inTemplate()){
+    for(const {date,day} of changes){
+      const normalized=validateDay(day);
+      if(normalized)templateDraft[date]=copy(normalized);
+      else delete templateDraft[date];
+    }
+    render();
+    return;
+  }
   for(const {date,day} of changes){
     const normalized=validateDay(day);
     if(normalized)model.member.draft[date]=copy(normalized);
@@ -142,13 +175,15 @@ function stageHeader(){
   return '<header class="mast"><div class="brand-lockup">'+
     '<div class="brand-symbol" aria-hidden="true"><span>W</span></div>'+
     '<div><p class="eyebrow">WINTERBOT / COMMUNITY SCHEDULING</p>'+
-    '<div class="brand-name">Your availability</div></div></div>'+
+    '<div class="brand-name">'+(inTemplate()?'Your usual week':'Your availability')+'</div></div></div>'+
     '<span class="environment-tag">TEST ACTIVITY</span></header>'+
     '<section class="hero"><div class="hero-copy"><p class="eyebrow">GAME NIGHT · '+esc(model.round.timezone)+'</p>'+
-    '<h1>'+esc(datestring(dates[0],'mini'))+' – '+esc(datestring(dates.at(-1),'mini'))+'</h1>'+
-    '<p>Pick your days, adjust your hours and review before submitting.</p></div>'+
+    '<h1>'+(inTemplate()?'Monday – Sunday':
+      esc(datestring(dates[0],'mini'))+' – '+esc(datestring(dates.at(-1),'mini')))+'</h1>'+
+    '<p>'+(inTemplate()?'Create a reusable schedule independently of this event.':
+      'Pick your days, adjust your hours and review before submitting.')+'</p></div>'+
     '<div class="progress-panel"><div class="progress-top"><strong>'+answered+' <span>/ '+dates.length+'</span></strong>'+
-    '<span>days answered</span></div><div class="progress-track"><div class="progress-fill" style="width:'+pct+'%"></div></div>'+
+    '<span>'+(inTemplate()?'weekdays set':'days answered')+'</span></div><div class="progress-track"><div class="progress-fill" style="width:'+pct+'%"></div></div>'+
     '<div class="save-indicator'+(errorSaving?' error':'')+'" data-role="save" role="status">'+esc(saveLabel())+'</div>'+
     '<button type="button" class="retry-save" data-action="retry"'+(errorSaving?'':' hidden')+'>Retry saving</button></div>'+
     '</section>';
@@ -160,11 +195,12 @@ function dayCards(){
     const chosenClass=multi&&chosenHere?' is-chosen':'';
     const iso=new Date(date+'T12:00:00Z');
     const day=iso.toLocaleDateString('en-GB',{weekday:'short',timeZone:'UTC'});
-    const n=iso.toLocaleDateString('en-GB',{day:'numeric',timeZone:'UTC'});
+    const n=inTemplate()?day:iso.toLocaleDateString('en-GB',{day:'numeric',timeZone:'UTC'});
     const mark=kind==='yes'?icon.check:kind==='unsure'?icon.unsure:kind==='off'?icon.off:icon.empty;
     const status=kind==='yes'?'Available':kind==='unsure'?'Tentative':
       kind==='off'?'Unavailable':'Not set';
     return '<button type="button" class="day-card state-'+kind+
+      (inTemplate()?' template-day':'')+
       (isActive?' is-active':'')+chosenClass+'" data-action="pick-day" data-date="'+date+
       '" aria-pressed="'+(multi?chosenHere:isActive)+
       '" aria-label="'+esc(datestring(date)+': '+status)+
@@ -175,10 +211,13 @@ function dayCards(){
 }
 function weekCard(){
   return '<section class="week-section" aria-label="Weekly dates">'+
-    '<div class="section-title"><div><p class="eyebrow">STEP 1</p><h2>Your week</h2></div>'+
+    '<div class="section-title"><div><p class="eyebrow">STEP 1</p><h2>'+
+    (inTemplate()?'Your usual week':'Your week')+'</h2></div>'+
     '<div class="week-actions">'+
-    (model.template?makeButton('Reuse','reuse','minor',
-      'title="Apply your usual week" aria-label="Reuse usual week"'):'')+
+    (!inTemplate()?(model.template?
+      makeButton('Reuse','reuse','minor','title="Reuse usual week"')+
+      makeButton('Edit template','open-template','minor'):
+      makeButton('Create usual week','open-template','minor')):'')+
     '</div></div>'+
     '<div class="week-grid">'+dayCards()+'</div>'+
     '<div class="week-mode-toggle" role="group" aria-label="Availability editing mode">'+
@@ -201,7 +240,7 @@ function freeClockIntervals(spec) {
   const dates=spec.source==='batch'?model.round.dates.filter(d=>chosen.has(d)):[spec.date];
   let shared=[[0,1440]];
   for(const date of dates) {
-    const restriction=model.round.allowedHoursByDate?.[date];
+    const restriction=inTemplate()?null:model.round.allowedHoursByDate?.[date];
     const permitted=(Array.isArray(restriction)?restriction:
       restriction?[restriction]:[{start:'00:00',end:'24:00'}])
       .map(w=>[minutes(w.start),minutes(w.end)])
@@ -238,15 +277,15 @@ function timeRail(windows){
     '<div class="time-track">'+segments+'</div><div class="time-ticks">'+ticks+'</div></div>';
 }
 function statusText(day) {
-  if(!day)return '<span class="status-label empty">Not answered</span>';
-  if(day.status==='unavailable')return '<span class="status-label unavailable">Unavailable</span>';
-  return day.windows.map(w=>{
+  if(!day)return '<div class="review-time-labels"><span class="status-label empty">Not answered</span></div>';
+  if(day.status==='unavailable')return '<div class="review-time-labels"><span class="status-label unavailable">Unavailable</span></div>';
+  return '<div class="review-time-labels">'+day.windows.map(w=>{
     const all=w.start==='00:00'&&w.end==='24:00';
     const time=all?'All day':formatTime(w.start)+'–'+formatTime(w.end);
     return '<span class="status-label '+(w.kind==='tentative'?'tentative':'confirmed')+'">'+
       esc(time)+(w.kind==='tentative'?' (tentative)':'')+
       (w.maxMinutes?' · max '+w.maxMinutes+'m':'')+'</span>';
-  }).join('<span class="window-separator">, </span>');
+  }).join('')+'</div>';
 }
 function miniTimeBar(day){
   let segments='';
@@ -256,7 +295,7 @@ function miniTimeBar(day){
     return '<span class="bar-segment '+w.kind+'" style="left:'+(a/1440*100)+
       '%;width:'+((b-a)/1440*100)+'%" title="'+esc(summary({status:'available',windows:[w]}))+'"></span>';
   }).join('');
-  return '<div class="mini-time-bar" role="img" aria-label="'+
+  return '<div class="mini-time-bar '+(!day?'unanswered':day.status==='unavailable'?'fully-unavailable':'')+'" role="img" aria-label="'+
     esc(summary(day))+ '">'+segments+'</div>';
 }
 function statusWithBar(day){
@@ -311,7 +350,7 @@ function singleEditor(){
   const badge=kind==='hours'?(isTentative?'Tentative':'Available'):
     kind==='off'?'Unavailable':'Not answered';
   const title='<div class="editor-heading"><div><p class="eyebrow">STEP 2 · EDIT DAY</p><h2>'+
-    esc(datestring(date))+'</h2></div><span class="pill '+dayKind(entry)+'">'+
+    esc(inTemplate()?weekday(date):datestring(date))+'</h2></div><span class="pill '+dayKind(entry)+'">'+
     esc(badge)+'</span></div>';
   const buttons='<div class="choice-row">'+
     makeButton('All day','all-day','choice'+(entry?.status==='available'&&
@@ -378,9 +417,43 @@ function reviewPage(){
     (!full?'<p class="warning-text">'+(dates.length-answered)+' unanswered day(s). Finish them before submitting.</p>':'')+
     '<p class="review-scroll-hint" data-role="review-scroll" hidden>Scroll through all dates to enable submission.</p>'+
     '<div class="bottom-actions">'+makeButton('Back to editing','back','outline')+
+    (model.member.submitted?makeButton(hasRevision()?'Discard changes':'Back to submission',
+      'exit-revision','outline'):'')+
     makeButton('Confirm & submit','submit','primary',full&&!errorSaving&&!dirty.size&&reviewReady&&!saving&&reviewSeenBottom?'':'disabled')+
     '</div></section>';
 }
+function templateReviewPage(){
+  const answered=model.round.dates.filter(d=>dayEntry(d)).length;
+  const rows=model.round.dates.map(date=>{
+    const day=dayEntry(date);
+    return '<div class="review-row"><div class="review-date"><span class="status-dot '+
+      dayKind(day)+'"></span><strong>'+esc(weekday(date))+'</strong></div>'+
+      statusWithBar(day)+
+      makeButton('Edit','template-edit-day','minor','data-date="'+date+'"')+'</div>';
+  }).join('');
+  return '<section class="review-card template-review"><div class="section-title">'+
+    '<div><p class="eyebrow">REUSABLE SCHEDULE</p><h2>Review your usual week</h2></div>'+
+    '<span class="pill">'+answered+'/7 set</span></div>'+
+    '<p class="hint">This saves a reusable starting point, not an event response. Unanswered weekdays will stay blank when reused.</p>'+
+    '<div class="review-list">'+rows+'</div>'+
+    '<p class="review-scroll-hint" data-role="template-scroll" hidden>Review all weekdays before saving.</p>'+
+    '<div class="bottom-actions">'+makeButton('Back to editing','template-review-back','outline')+
+    makeButton('Save usual week','template-commit','primary',
+      answered>0&&templateSeenBottom&&!templateBusy?'':'disabled')+
+    '</div></section>';
+}
+function templateFooter(){
+  const source=templateOrigin==='submitted'?'Prefilled from submitted week':
+    templateOrigin==='existing'?'Editing your saved usual week':
+    templateOrigin==='draft'?'Prefilled from your current draft':'New blank usual week';
+  return '<footer class="action-footer template-footer"><div>'+
+    '<strong>Usual week · Not saved</strong><small>'+source+' · Does not change event submission</small></div>'+
+    '<div class="footer-buttons">'+
+    makeButton('Cancel','template-cancel','outline')+
+    makeButton('Reset','template-reset','outline')+
+    makeButton('Review template','template-review-open','primary')+'</div></footer>';
+}
+
 function donePage(){
   return '<section class="receipt"><div class="receipt-icon" aria-hidden="true">✓</div>'+
     '<p class="eyebrow">SUBMISSION COMPLETE</p><h2>Your week is submitted</h2>'+
@@ -389,7 +462,7 @@ function donePage(){
       '<div class="review-row"><strong>'+esc(datestring(d,'mini'))+'</strong>'+
       '<span>'+esc(summary(model.member.submitted?.[d]))+'</span></div>').join('')+'</div>'+
     '<div class="bottom-actions">'+makeButton('Edit my availability','back','outline')+
-    makeButton(model.template?'Update usual week':'Save as my usual week','save-template','primary')+
+    makeButton(model.template?'Edit usual week':'Create usual week','open-template','primary')+
     '</div></section>';
 }
 function facePoint(value,radius) {
@@ -767,17 +840,28 @@ function popupHtml(){
         '<div><strong>'+esc(datestring(d,'mini'))+'</strong><span>'+
         esc(summary(model.template?.[weekday(d)]))+'</span></div>').join('')+'</div>';
     confirm='Apply usual week';
-  }else if(popup.type==='template'){
-    title=model.template?'Update your usual week?':'Save your usual week?';
-    body='<p class="hint">This will be used as your starting point for future scheduling rounds. '+
-      'It will never automatically submit availability.</p>';
-    confirm=model.template?'Update my template':'Save my template';
+  }else if(popup.type==='discard'){
+    title='Discard unsubmitted changes?';
+    body='<p class="hint">Your previously submitted week will remain exactly as it was. '+
+      'Only changes made since that submission will be discarded.</p>';
+    confirm='Discard changes';
+  }else if(popup.type==='template-reset'){
+    title='Reset usual-week editor?';
+    body='<p class="hint">Choose a starting point for the reusable template. '+
+      'This will replace your unsaved template edits, but not your actual event submission.</p>'+
+      '<div class="template-reset-options">'+
+      (model.member.submitted?makeButton('Copy submitted week','reset-template-submitted','outline'):'')+
+      (Object.keys(model.member.draft).length?makeButton('Copy current event draft','reset-template-draft','outline'):'')+
+      makeButton('Start with a blank week','reset-template-blank','outline')+'</div>';
+    confirm='Keep current template';
   }
   return '<div class="overlay" data-action="dismiss-overlay"><div class="dialog" role="dialog" aria-modal="true" aria-label="'+esc(title)+'">'+
     '<div class="dialog-header"><h2>'+esc(title)+'</h2>'+
     makeButton('×','dismiss','icon-button')+'</div>'+body+
     '<div class="bottom-actions">'+makeButton('Cancel','dismiss','outline')+
-    makeButton(confirm,'confirm-popup','primary',popup.type==='copy'&&!popup.dates.length?'disabled':'')+
+    makeButton(confirm,popup.type==='template-reset'?'dismiss':'confirm-popup',
+      popup.type==='discard'?'danger':'primary',
+      popup.type==='copy'&&!popup.dates.length?'disabled':'')+
     '</div></div></div>';
 }
 let lastEditorKey='';
@@ -785,21 +869,26 @@ let nextWindowScroll=null;
 function render(){
   if(!model)return;
   const oldY=window.scrollY;
-  const editorKey=view==='week'?(multi?'batch':selectedDay):'';
+  const editorKey=(view==='week'||view==='template')?
+    view+'-'+(multi?'batch':selectedDay):'';
   const editorScroll=editorKey===lastEditorKey?
     (root.querySelector('.window-list')||
       root.querySelector('.workspace>.editor-card'))?.scrollTop||0:0;
-  const content=view==='review'?reviewPage():view==='done'?donePage():
+  const content=view==='review'?reviewPage():view==='template-review'?templateReviewPage():
+    view==='done'?donePage():
     '<div class="workspace">'+weekCard()+(multi?batchEditor():singleEditor())+'</div>';
   root.innerHTML='<main class="app-shell">'+stageHeader()+
     (notice?'<div class="message '+(noticeError?'danger':'')+'" role="status">'+esc(notice)+'</div>':'')+
     content+
     (view==='week'?'<footer class="action-footer"><div><strong>'+
       (!model.member.submitted?'Draft · Not submitted':
-        JSON.stringify(model.member.draft)===JSON.stringify(model.member.submitted)?
-          'Submitted · You can edit your response':'Changes not yet submitted')+
-      '</strong><small>Edits save automatically. Review is required to submit.</small></div>'+
-      makeButton('Review week →','review','primary')+'</footer>':'')+
+        hasRevision()?'Changes not yet submitted':'Submitted · You can edit your response')+
+      '</strong><small>Drafts save automatically; only reviewed submissions count.</small></div>'+
+      '<div class="footer-buttons">'+
+      (model.member.submitted?makeButton(hasRevision()?'Discard changes':'Back to submission',
+        'exit-revision','outline'):'')+
+      makeButton('Review week →','review','primary')+'</div></footer>':
+      view==='template'?templateFooter():'')+
     '<div class="privacy-note">TEST ONLY · Your answers stay in the isolated WinterBot testing system.</div>'+
     popupHtml()+'</main>';
   window.scrollTo(0,oldY);
@@ -811,15 +900,24 @@ function render(){
   }
   nextWindowScroll=null;
   lastEditorKey=editorKey;
-  if(view==='review')setupReviewScroll();
+  if(view==='review'||view==='template-review')setupReviewScroll();
 }
 function setupReviewScroll(){
   const list=root.querySelector('.review-list');
   if(!list)return;
   const update=()=>{
     const overflows=list.scrollHeight>list.clientHeight+2;
-    if(!overflows||list.scrollTop+list.clientHeight>=list.scrollHeight-3)
-      reviewSeenBottom=true;
+    const atEnd=!overflows||list.scrollTop+list.clientHeight>=list.scrollHeight-3;
+    if(view==='template-review'){
+      if(atEnd)templateSeenBottom=true;
+      const hint=root.querySelector('[data-role="template-scroll"]');
+      if(hint)hint.hidden=!overflows||templateSeenBottom;
+      const save=root.querySelector('[data-action="template-commit"]');
+      if(save)save.disabled=!templateSeenBottom||templateBusy||
+        !model.round.dates.some(d=>templateDraft[d]);
+      return;
+    }
+    if(atEnd)reviewSeenBottom=true;
     const hint=root.querySelector('[data-role="review-scroll"]');
     if(hint)hint.hidden=!overflows||reviewSeenBottom;
     const submit=root.querySelector('[data-action="submit"]');
@@ -903,6 +1001,95 @@ function selectDay(date){
   }else selectedDay=date;
   render();
 }
+async function openTemplateEditor(){
+  // Finish writing the real event draft before switching to a completely
+  // independent, explicitly-saved usual-week editor.
+  await flushAll();
+  templateReturnView=view==='done'?'done':'week';
+  let source=null;
+  if(model.template){
+    templateOrigin='existing';
+    source=model.template;
+  }else if(model.member.submitted){
+    templateOrigin='submitted';
+    source=model.member.submitted;
+  }else if(Object.keys(model.member.draft).length){
+    templateOrigin='draft';
+    source=model.member.draft;
+  }else{
+    templateOrigin='blank';
+  }
+  templateDraft=draftForWeekdays(source);
+  templateSeenBottom=false;
+  templateBusy=false;
+  view='template';
+  popup=null;selectedDay=model.round.dates[0];
+  multi=false;chosen.clear();
+  notice='';noticeError=false;
+  render();
+}
+function resetTemplate(source){
+  if(!inTemplate())return;
+  if(source==='submitted'&&model.member.submitted){
+    templateDraft=draftForWeekdays(model.member.submitted);
+    templateOrigin='submitted';
+  }else if(source==='draft'&&Object.keys(model.member.draft).length){
+    templateDraft=draftForWeekdays(model.member.draft);
+    templateOrigin='draft';
+  }else{
+    templateDraft={};
+    templateOrigin='blank';
+  }
+  popup=null;view='template';templateSeenBottom=false;
+  multi=false;chosen.clear();selectedDay=model.round.dates[0];
+  notice='Template editor reset. Nothing was saved.';
+  render();
+}
+function cancelTemplate(){
+  templateDraft={};
+  popup=null;view=templateReturnView;
+  templateSeenBottom=false;templateBusy=false;
+  multi=false;chosen.clear();
+  notice='Template editing cancelled. Your saved data is unchanged.';
+  render();
+}
+async function commitTemplate(){
+  if(view!=='template-review'||!templateSeenBottom)return;
+  const days={};
+  for(const date of model.round.dates){
+    if(templateDraft[date])days[weekday(date)]=copy(templateDraft[date]);
+  }
+  if(!Object.keys(days).length)throw Error('Set at least one weekday.');
+  templateBusy=true;render();
+  try{
+    const response=await request('ux/template-update',{confirm:true,days});
+    model=response;
+    view=templateReturnView;
+    templateDraft={};
+    templateBusy=false;templateSeenBottom=false;
+    multi=false;chosen.clear();
+    notice='Your usual-week template is saved. Event submissions are unchanged.';
+    render();
+  }catch(error){
+    templateBusy=false;
+    actionError(error);
+  }
+}
+
+async function discardRevision(){
+  if(!model.member.submitted)throw Error('No previous submission exists.');
+  // Wait for any in-flight background write before the authoritative reset,
+  // but skip pending unsent edits. Do not force a failed draft to save.
+  if(saveTimer){clearTimeout(saveTimer);saveTimer=null;}
+  while(saving)await new Promise(resolve=>setTimeout(resolve,30));
+  dirty.clear();errorSaving=false;
+  const response=await request('ux/discard-revision',{confirm:true});
+  model=response;
+  popup=null;view='done';multi=false;chosen.clear();
+  reviewReady=false;reviewSeenBottom=false;
+  notice='Your previous submission is unchanged.';
+  render();
+}
 async function openReview(){
   view='review';reviewReady=false;reviewSeenBottom=false;notice='';render();
   try{
@@ -940,10 +1127,8 @@ async function confirmPopup(){
       model=response;chosen.clear();multi=false;popup=null;view='week';
       notice='Usual week copied to this draft. Review before submitting.';render();return;
     }
-    if(active.type==='template'){
-      await flushAll();
-      const response=await request('ux/template-save',{confirm:true});
-      model=response;popup=null;notice='Usual week saved for future rounds.';render();return;
+    if(active.type==='discard'){
+      await discardRevision();return;
     }
   }catch(error){actionError(error);}
 }
@@ -1006,6 +1191,24 @@ function onClick(event){
       if(action==='clock-save'){saveClockRange();return;}
     }
     if(action==='confirm-popup'){confirmPopup();return;}
+    if(action==='open-template'){openTemplateEditor().catch(actionError);return;}
+    if(action==='template-cancel'){cancelTemplate();return;}
+    if(action==='template-reset'){popup={type:'template-reset'};render();return;}
+    if(action==='reset-template-blank'){resetTemplate('blank');return;}
+    if(action==='reset-template-submitted'){resetTemplate('submitted');return;}
+    if(action==='reset-template-draft'){resetTemplate('draft');return;}
+    if(action==='template-review-open'){
+      templateSeenBottom=false;view='template-review';notice='';render();return;
+    }
+    if(action==='template-review-back'){
+      templateSeenBottom=false;view='template';render();return;
+    }
+    if(action==='template-edit-day'){
+      templateSeenBottom=false;view='template';
+      selectedDay=element.dataset.date;multi=false;chosen.clear();
+      render();return;
+    }
+    if(action==='template-commit'){commitTemplate().catch(actionError);return;}
     if(action==='pick-day'){selectDay(element.dataset.date);return;}
     if(action==='mode-single'){
       multi=false;chosen.clear();notice='';render();return;
@@ -1042,9 +1245,14 @@ function onClick(event){
     }
     if(action==='reuse'){if(!model.template)throw Error('No usual week is saved yet.');
       popup={type:'reuse'};render();return;}
-    if(action==='save-template'){
-      if(!model.member.submitted)throw Error('Submit your week before saving a template.');
-      popup={type:'template'};render();return;
+    if(action==='exit-revision'){
+      if(!model.member.submitted)return;
+      if(hasRevision()){
+        popup={type:'discard'};render();
+      }else{
+        view='done';multi=false;chosen.clear();notice='';render();
+      }
+      return;
     }
     if(action==='review'){openReview();return;}
     if(action==='review-edit'){

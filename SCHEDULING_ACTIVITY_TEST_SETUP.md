@@ -129,19 +129,29 @@ Run these as the test-server owner or a member with Manage Server permission:
 4. Use the full-width **Single day / Multiple days** mode control below the
    weekly calendar. Select multiple days, choose their common availability
    (or All permitted hours / Unavailable), and apply. Existing answers get
-   a green/yellow/red overwrite preview before replacement.
+   a green/amber/slate-gray overwrite preview before replacement.
 5. Use **Copy this day** to copy all its windows to chosen dates.
-6. Choose **Review week**. Every date shows a small green (confirmed), yellow
-   (tentative), or red (unavailable) timeline plus the exact times. Tentative
-   windows read e.g. "19:00–22:00 (tentative)". The final submission is
-   disabled until all seven dates are answered, latest changes are saved
-   and the review has been inspected. Submit explicitly.
-7. Save your submitted answers as your usual week. Run **/activitytest next-week** to
-   start another seven-day round while preserving templates, relaunch and choose
-   **Reuse usual week**. Review and correct exceptions before submitting again.
-8. Close/reopen the Activity to verify persistence.
-9. **/activitytest reset** removes ONLY the isolated Activity test round AND usual-week
-   templates. It does not modify real community events, roles, or invitations.
+6. Choose **Review week**. Every date shows a compact timeline: green confirmed,
+   amber/yellow tentative, and muted slate-gray unavailable. Unselected gaps
+   inside a reviewed day are unavailable too, so the bar never leaves them
+   ambiguously blank. Tentative ranges read `19:00–22:00 (tentative)`; multiple
+   ranges stack without extra separator rows. Review every date, then submit.
+7. To try revising an existing submission, edit a day after submitting. The
+   **Discard changes** button prompts before restoring the last submitted
+   snapshot; saved draft changes are removed, but submitted answers remain.
+   **Back to submission** exits immediately when there is nothing to discard.
+8. Click **Create usual week** (or **Edit usual week**) to open a separate,
+   reusable Monday–Sunday editor. It starts with an existing saved template,
+   otherwise your submitted week, otherwise your current draft or a blank week.
+   Modify each weekday freely; **Reset** offers a blank week or copying back
+   from the submitted week. **Cancel** leaves the saved template unchanged.
+   **Review template** and **Save usual week** are explicit actions; saving a
+   template never revises or submits availability for an actual event.
+9. Run **/activitytest next-week** to test reusing your saved usual week and
+   editing exceptions. Unanswered weekdays in a partial template stay unanswered.
+10. Close/reopen the Activity to verify persistence.
+11. **/activitytest reset** removes ONLY the isolated Activity test round AND
+    usual-week templates. It does not modify real events or roles.
 
 The older test-server **/activitytest vote** backend exists for legacy algorithm
 verification, but voting is NOT connected to this focused weekly-calendar UX pilot.
@@ -165,8 +175,10 @@ Do not use it as an end-to-end test of the new Activity's voting interface.
   scheduling.json and the legacy Activity test state remain untouched.
 - Confirmed and tentative ranges, five-minute precision, optional duration limits,
   copy-day, multi-day editing, usual-week template, required review, explicit submit.
-- Controls remain usable while changes save in the background. Save failures show a
-  retry option. A saved draft does not count as a confirmed submission.
+- Controls remain usable while event drafts save in the background. Save failures
+  show retry. A draft does not count as a submission, and a template is edited
+  locally until you explicitly review and save it. Discarding an event revision
+  restores the previously submitted state on the backend.
 - No real event check-in, Discord role/channel changes, organizer controls or
   Scheduled Event publishing in this prototype. Those remain later milestones.
 

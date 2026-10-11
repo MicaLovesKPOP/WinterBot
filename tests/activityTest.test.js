@@ -361,3 +361,70 @@ test('weekly Activity API is test-guild authenticated, CSRF protected and isolat
     assert.equal(f.activity.weeklyUx.store.read().rounds.weekly.members[USER_ID].draft[date].status,'unavailable');
   }finally{await app.stop();f.clean();}
 });
+
+
+test('Activity API preserves submitted attendance when cancelling revisions and editing templates',async()=>{
+  const f=fixture(),{app,url}=await start(f,12390);
+  try{
+    let response=await fetch(url+'/activity/api/token',{
+      method:'POST',headers:headers(f.activity.origin),
+      body:JSON.stringify({code:'valid-weekly-ux-code'}),
+    });
+    assert.equal(response.status,200);
+    const cookie=response.headers.get('set-cookie').split(';')[0];
+    const apiHeaders=headers(f.activity.origin,{Cookie:cookie});
+    response=await fetch(url+'/activity/api/ux/state',{headers:{Cookie:cookie}});
+    assert.equal(response.status,200);
+    const dates=(await response.json()).round.dates;
+    const updates=dates.map(date=>({date,status:'unavailable',windows:[]}));
+    response=await fetch(url+'/activity/api/ux/draft',{
+      method:'POST',headers:apiHeaders,body:JSON.stringify({days:updates}),
+    });
+    assert.equal(response.status,200);
+    response=await fetch(url+'/activity/api/ux/review',{
+      method:'POST',headers:apiHeaders,body:JSON.stringify({confirmReview:true}),
+    });
+    assert.equal(response.status,200);
+    response=await fetch(url+'/activity/api/ux/submit',{
+      method:'POST',headers:apiHeaders,body:JSON.stringify({confirm:true}),
+    });
+    assert.equal(response.status,200);
+    const original=(await response.json()).member.submitted;
+
+    const usual={Monday:{status:'available',windows:[{
+      start:'19:00',end:'22:00',kind:'tentative',maxMinutes:null,
+    }]}};
+    response=await fetch(url+'/activity/api/ux/template-update',{
+      method:'POST',headers:headers('https://untrusted.example',{Cookie:cookie}),
+      body:JSON.stringify({confirm:true,days:usual}),
+    });
+    assert.equal(response.status,403,'template updates must respect CSRF rules');
+    response=await fetch(url+'/activity/api/ux/template-update',{
+      method:'POST',headers:apiHeaders,body:JSON.stringify({confirm:true,days:usual}),
+    });
+    assert.equal(response.status,200);
+    assert.deepEqual((await response.json()).template,usual);
+
+    response=await fetch(url+'/activity/api/ux/draft',{
+      method:'POST',headers:apiHeaders,body:JSON.stringify({days:[{
+        date:dates[0],status:'available',windows:[{
+          start:'18:00',end:'22:00',kind:'confirmed',maxMinutes:null,
+        }],
+      }]}),
+    });
+    assert.equal(response.status,200);
+    response=await fetch(url+'/activity/api/ux/discard-revision',{
+      method:'POST',headers:apiHeaders,body:JSON.stringify({confirm:true}),
+    });
+    assert.equal(response.status,200);
+    const restored=await response.json();
+    assert.deepEqual(restored.member.draft,original);
+    assert.deepEqual(restored.member.submitted,original);
+    assert.deepEqual(restored.template,usual);
+    assert.equal(f.activity.store.read().rounds.length,0,
+      'Template edits must not create a legacy test round');
+  }finally{
+    await app.stop();
+    f.clean();
+  }
+});

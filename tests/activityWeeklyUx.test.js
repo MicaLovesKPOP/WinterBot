@@ -137,3 +137,58 @@ test('moderator day-hour bounds are exposed and enforced by the test backend',as
   await assert.rejects(()=>ux.mutate(USER,'template-apply',{confirm:true}),/allowed hours/);
   assert.equal((await ux.read(USER)).member.draft[date].windows[0].start,'17:30');
 });
+
+test('discard-revision restores the previous submission, not merely the visible editor',async t=>{
+  const ux=fixture(t);
+  const dates=(await ux.read(USER)).round.dates;
+  await ux.mutate(USER,'draft',{days:dates.map(date=>({date,...available('18:00','21:00')}))});
+  await ux.mutate(USER,'review',{confirmReview:true});
+  await ux.mutate(USER,'submit',{confirm:true});
+  const original=(await ux.read(USER)).member.submitted;
+  await ux.mutate(USER,'draft',{days:[
+    {date:dates[0],...available('09:00','11:00','tentative')},
+    {date:dates[1],status:'unavailable',windows:[]},
+  ]});
+  await assert.rejects(()=>ux.mutate(USER,'discard-revision',{}),/Confirm/);
+  const before=await ux.read(USER);
+  assert.equal(before.member.submitted[dates[0]].windows[0].start,'18:00');
+  assert.equal(before.member.draft[dates[0]].windows[0].start,'09:00');
+  const discarded=await ux.mutate(USER,'discard-revision',{confirm:true});
+  assert.deepEqual(discarded.member.draft,original);
+  assert.deepEqual(discarded.member.submitted,original);
+  await assert.rejects(()=>ux.mutate(OTHER,'discard-revision',{confirm:true}),/no submitted week/i);
+  const reloaded=createActivityWeeklyUx({dataFile:ux.store.file});
+  assert.deepEqual((await reloaded.read(USER)).member.draft,original);
+});
+
+test('editable usual week is independent, can be partial and never changes the submitted round',async t=>{
+  const ux=fixture(t);
+  const dates=(await ux.read(USER)).round.dates;
+  await ux.mutate(USER,'draft',{days:dates.map(date=>({date,...available()}))});
+  await ux.mutate(USER,'review',{confirmReview:true});
+  await ux.mutate(USER,'submit',{confirm:true});
+  const submitted=(await ux.read(USER)).member.submitted;
+  const usual={
+    Monday:available('08:00','12:00'),
+    Tuesday:available('13:00','17:00','tentative'),
+    Friday:{status:'unavailable',windows:[]},
+  };
+  await assert.rejects(()=>ux.mutate(USER,'template-update',{days:usual}),/Confirm/);
+  await assert.rejects(()=>ux.mutate(USER,'template-update',{confirm:true,days:{
+    Funday:available(),
+  }}),/weekdays/);
+  await assert.rejects(()=>ux.mutate(USER,'template-update',{confirm:true,days:{}}),/weekdays/);
+  const updated=await ux.mutate(USER,'template-update',{confirm:true,days:usual});
+  assert.deepEqual(updated.template,usual);
+  assert.deepEqual(updated.member.draft,submitted);
+  assert.deepEqual(updated.member.submitted,submitted);
+  const next=await ux.advanceWeek();
+  const applied=await ux.mutate(USER,'template-apply',{confirm:true});
+  assert.equal(applied.member.draft[next.dates[0]].windows[0].start,'08:00');
+  assert.equal(applied.member.draft[next.dates[1]].windows[0].kind,'tentative');
+  assert.equal(applied.member.draft[next.dates[4]].status,'unavailable');
+  assert.equal(applied.member.draft[next.dates[2]],undefined,
+    'Unanswered template weekdays must not be invented as Available');
+  const reloaded=createActivityWeeklyUx({dataFile:ux.store.file});
+  assert.deepEqual((await reloaded.read(USER)).template,usual);
+});
