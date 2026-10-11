@@ -1,167 +1,193 @@
 'use strict';
 
-// Real browser render and interaction coverage with a mocked Discord SDK and
-// API. The mock never grants backend access; Activity OAuth is separately
-// exercised in authenticated HTTP tests.
+// Browser-level UX validation using a fake SDK and fake API only.
+// OAuth, permissions and backend writes are separately tested over HTTP.
 const assert=require('node:assert/strict');
-const fs=require('node:fs');
-const os=require('node:os');
-const path=require('node:path');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {chromium}=require('playwright-core');
 const {createScheduler}=require('../src/scheduling/server');
 const {createActivityTest}=require('../src/scheduling/activityTest');
 
-const EDGE=process.env.WINTERBOT_BROWSER ||
+const EDGE=process.env.WINTERBOT_BROWSER||
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-const dir=fs.mkdtempSync(path.join(os.tmpdir(),'winterbot-activity-browser-'));
+const temp=fs.mkdtempSync(path.join(os.tmpdir(),'winterbot-activity-browser-'));
 const port=12421,base='http://127.0.0.1:'+port;
-const id='112233445566778899';
-const fakeClient={
-  guilds:{async fetch(){throw Error('No live Discord in UI smoke test');}},
-};
+const clientId='112233445566778899';
 const activity=createActivityTest({
-  client:fakeClient,clientId:id,clientSecret:'not-real',
-  sessionSecret:'this-is-only-a-local-activity-test-secret-1234',
-  dataFile:path.join(dir,'activity.json'),
+  client:{guilds:{async fetch(){throw Error('No live Discord in UI smoke test');}}},
+  clientId,clientSecret:'test-only',
+  sessionSecret:'activity-test-local-only-at-least-32-characters',
+  dataFile:path.join(temp,'activity.json'),
 });
-const app=createScheduler({
-  mode:'demo',host:'127.0.0.1',port,activityTest:activity,
-  dataFile:path.join(dir,'demo.json'),
-});
-const dates=['2026-10-17','2026-10-18','2026-10-19'];
-let round={
-  id:'browser-activity-test',title:'WinterBot Activity Test Night',
-  timezone:'Europe/Amsterdam',phase:'collecting',
-  dates, dayLimits:{
-    [dates[0]]:{start:'17:30',end:'24:00'},
-    [dates[1]]:{start:'10:00',end:'24:00'},
-    [dates[2]]:{start:'14:00',end:'22:00'},
-  },
-  minDurationMinutes:60,maxDurationMinutes:180,
-  availability:{},ballot:null,
+const app=createScheduler({mode:'demo',host:'127.0.0.1',port,
+  activityTest:activity,dataFile:path.join(temp,'demo.json')});
+const dates=['2026-10-12','2026-10-13','2026-10-14','2026-10-15',
+  '2026-10-16','2026-10-17','2026-10-18'];
+const state={
+  user:{id:'123456789012345678',name:'Test member'},
+  round:{id:'weekly-ui',title:'Weekly Game Night',dates,timezone:'Europe/Amsterdam'},
+  member:{draft:{},submitted:null,submittedAt:null,clockFormat:'24'},
+  template:null,progress:{answered:0,total:7,complete:false,reviewed:false},
 };
-const savedVotes=[];
-function json(data,status=200) {
+let serverReviewed=null,saves=0;
+function snap(){
+  state.progress.answered=dates.filter(d=>state.member.draft[d]).length;
+  state.progress.complete=state.progress.answered===7;
+  return structuredClone({...state,sandbox:true});
+}
+function json(data,status=200){
   return {status,contentType:'application/json',body:JSON.stringify(data)};
 }
 async function run(){
   await app.start();
-  const browser=await chromium.launch({
-    headless:true,executablePath:EDGE,
-    args:['--no-sandbox','--disable-gpu'],
-  });
+  const browser=await chromium.launch({headless:true,executablePath:EDGE,
+    args:['--no-sandbox','--disable-gpu']});
   try{
-    const context=await browser.newContext({viewport:{width:900,height:950}});
+    const context=await browser.newContext({viewport:{width:1000,height:860}});
     await context.addInitScript(()=>{
       window.__WINTERBOT_ACTIVITY_SDK_FACTORY__=()=>({
-        ready:async()=>{},
-        commands:{
-          authorize:async()=>({code:'test-code'}),
-          authenticate:async()=>({id:'user-from-discord'}),
+        ready:async()=>{},commands:{
+          authorize:async()=>({code:'mock-auth-code'}),
+          authenticate:async()=>({id:'test-member'}),
         },
       });
     });
-    const page=await context.newPage();
-    const errors=[];
+    const page=await context.newPage(),errors=[];
+    page.setDefaultTimeout(8000);
     page.on('pageerror',e=>errors.push(e.message));
     await page.route('**/activity/api/**',async route=>{
-      const request=route.request();
-      const pathName=new URL(request.url()).pathname;
-      const req=request.postDataJSON?.()||{};
-      if(pathName.endsWith('/config'))return route.fulfill(json({clientId:id}));
-      if(pathName.endsWith('/token'))return route.fulfill(json({access_token:'mock-token'}));
-      if(pathName.endsWith('/state'))return route.fulfill(json({
-        user:{id:'p1',name:'Test Participant'},round,
-      }));
-      if(pathName.endsWith('/availability')){
-        for(const day of req.days||[]){
-          if(day.status==='unanswered')delete round.availability[day.date];
-          else round.availability[day.date]={
-            status:day.status, windows:day.windows||[],
-            ...(day.maxMinutes==null?{}:{maxMinutes:day.maxMinutes}),
-          };
+      const request=route.request(),pathname=new URL(request.url()).pathname;
+      const body=request.postDataJSON?.()||{};
+      if(pathname.endsWith('/config'))return route.fulfill(json({clientId}));
+      if(pathname.endsWith('/token'))return route.fulfill(json({access_token:'mock-token'}));
+      if(pathname.endsWith('/ux/state'))return route.fulfill(json(snap()));
+      if(pathname.endsWith('/ux/draft')){
+        saves++;
+        // Simulate a slow network write. The browser must still respond instantly.
+        await new Promise(resolve=>setTimeout(resolve,450));
+        for(const entry of body.days||[]){
+          if(entry.status==='unanswered')delete state.member.draft[entry.date];
+          else state.member.draft[entry.date]={status:entry.status,windows:entry.windows||[]};
         }
-        return route.fulfill(json({round}));
+        serverReviewed=null;
+        return route.fulfill(json(snap()));
       }
-      if(pathName.endsWith('/vote')){
-        savedVotes.splice(0,savedVotes.length,...req.candidateIds);
-        round.ballot.votes=[...savedVotes];
-        return route.fulfill(json({round}));
+      if(pathname.endsWith('/ux/review')){
+        serverReviewed=JSON.stringify(state.member.draft);
+        state.progress.reviewed=true;return route.fulfill(json(snap()));
       }
-      return route.fulfill(json({error:'Unrecognized browser test API'},404));
+      if(pathname.endsWith('/ux/submit')){
+        if(!state.progress.complete||serverReviewed!==JSON.stringify(state.member.draft))
+          return route.fulfill(json({error:'Review and complete every date.'},400));
+        state.member.submitted=structuredClone(state.member.draft);
+        state.member.submittedAt=new Date().toISOString();
+        return route.fulfill(json(snap()));
+      }
+      if(pathname.endsWith('/ux/template-save')){
+        state.template=Object.fromEntries(dates.map((d,i)=>[
+          ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][i],
+          structuredClone(state.member.submitted[d]),
+        ]));
+        return route.fulfill(json(snap()));
+      }
+      if(pathname.endsWith('/ux/template-apply')){
+        for(let i=0;i<dates.length;i++)
+          state.member.draft[dates[i]]=structuredClone(state.template[
+            ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][i]]);
+        return route.fulfill(json(snap()));
+      }
+      if(pathname.endsWith('/ux/preference')){
+        state.member.clockFormat=body.clock;
+        return route.fulfill(json(snap()));
+      }
+      return route.fulfill(json({error:'No mock route '+pathname},404));
     });
     await page.goto(base+'/activity/',{waitUntil:'networkidle'});
-    await page.getByText('WinterBot Activity Test Night').waitFor();
-    assert.equal(await page.locator('.day').count(),3);
-    assert.equal(await page.locator('[data-action="status"]').count(),3);
+    await page.getByRole('heading',{name:'Your week',exact:true}).waitFor();
+    assert.equal(await page.locator('.day-card').count(),7);
+    assert.equal(await page.locator('.range-row').count(),0);
 
-    await page.locator('[data-action="status"][data-status="available"]').click();
-    await page.locator('#start-0').waitFor();
-    const values=await page.locator('#start-0 option').evaluateAll(options=>options.map(x=>x.value));
-    assert.equal(values[0],'17:30');
-    assert.ok(!values.includes('16:00'));
-    await page.locator('#end-0').selectOption('19:00');
-    await page.waitForFunction(()=>document.querySelector('#end-0')?.value==='19:00');
-    await page.locator('#cap-0').selectOption('60');
-    await page.waitForFunction(()=>document.querySelector('#cap-0')?.value==='60');
-    await page.locator('[data-action="add"]').click();
-    await page.locator('#start-1').waitFor();
-    await page.locator('#day-cap').selectOption('120');
-    await page.waitForFunction(()=>document.querySelector('#day-cap')?.value==='120');
-    assert.equal(round.availability[dates[0]].maxMinutes,120);
-    assert.equal(round.availability[dates[0]].windows.length,2);
-    assert.equal(round.availability[dates[0]].windows[0].maxMinutes,60);
-    await page.reload({waitUntil:'networkidle'});
-    assert.equal(await page.locator('#day-cap').inputValue(),'120');
-    assert.equal(await page.locator('#start-1').inputValue(),'19:00');
-    console.log('Activity availability saves multiple bounded windows and daily cap');
+    // Immediate local selection and editing while prior save is slow.
+    await page.locator('.day-card').nth(1).click();
+    await page.getByRole('heading',{name:/Tuesday 13 October/}).waitFor();
+    await page.locator('[data-action="set-hours"]').click();
+    await page.locator('.range-row').waitFor();
+    await page.locator('.day-card').nth(2).click();
+    await page.getByRole('heading',{name:/Wednesday 14 October/}).waitFor();
+    await page.locator('[data-action="unavailable"]').click();
+    assert.equal(await page.locator('.day-card.state-off').count(),1);
+    await page.locator('.day-card').nth(1).click();
+    await page.locator('[data-field="start"]').first().fill('19:30');
+    await page.locator('[data-field="kind"]').first().selectOption('tentative');
+    await page.getByText('Tentative hours').waitFor();
+    console.log('Local editing remains immediate during background saves.');
 
-    await page.locator('[data-action="day"]').nth(1).click();
-    await page.locator('[data-action="status"][data-status="unavailable"]').click();
-    await page.getByText('2 of 3 dates answered').waitFor();
-    assert.equal(round.availability[dates[1]].status,'unavailable');
-    console.log('Activity individual dates and progress update correctly');
+    await page.locator('[data-action="multi"]').click();
+    await page.locator('.day-card').nth(0).click();
+    await page.locator('.day-card').nth(3).click();
+    await page.locator('[data-action="batch-mode"][data-mode="all"]').click();
+    await page.locator('[data-action="apply-batch"]').click();
+    await page.getByText('Your week',{exact:true}).waitFor().catch(()=>{});
+    assert.equal(await page.locator('.day-card.state-yes').count(),2);
 
-    for(const width of [375,320]){
-      await page.setViewportSize({width,height:780});
-      const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
-      assert.ok(overflow<=1,'Activity must not overflow at '+width+'px, got '+overflow);
+    await page.locator('[data-action="review"]').click();
+    await page.getByRole('heading',{name:'Review your availability'}).waitFor();
+    assert.equal(await page.locator('[data-action="submit"]').isDisabled(),true);
+    console.log('Incomplete availability blocks final confirmation.');
+    await page.locator('[data-action="back"]').click();
+
+    for(const n of [4,5,6]){
+      await page.locator('.day-card').nth(n).click();
+      await page.locator('[data-action="all-day"]').click();
     }
-    await page.locator('[data-action="day"]').first().click();
+    await page.locator('[data-action="review"]').click();
+    await page.getByRole('heading',{name:'Review your availability'}).waitFor();
+    await page.locator('[data-action="submit"]:not([disabled])').waitFor();
     fs.mkdirSync(path.join(process.cwd(),'preview-screens'),{recursive:true});
-    await page.screenshot({
-      path:path.join(process.cwd(),'preview-screens','embedded-activity-mobile.png'),
-      fullPage:true,
-    });
-    assert.equal(errors.length,0,JSON.stringify(errors));
-    console.log('Activity renders inside a compact Discord-sized mobile viewport');
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','weekly-activity-review.png'),
+      fullPage:true});
+    await page.locator('[data-action="submit"]').click();
+    await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
+    assert.ok(state.member.submitted);
+    await page.locator('[data-action="save-template"]').click();
+    await page.locator('[data-action="confirm-popup"]').click();
+    await page.getByText('Usual week saved for future rounds.').waitFor();
+    assert.equal(Object.keys(state.template).length,7);
+    console.log('Reviewed submission and reusable weekly template work.');
 
-    round.phase='voting';
-    round.ballot={closesAt:new Date(Date.now()+3600000).toISOString(),votes:[],
-      options:[
-        {id:'candidate-a',date:dates[0],time:'18:00',durationMinutes:120},
-        {id:'candidate-b',date:dates[1],time:'20:00',durationMinutes:90},
-      ],
-    };
-    await page.reload({waitUntil:'networkidle'});
-    await page.getByText('Vote on the suggested times').waitFor();
-    await page.locator('[data-vote="candidate-b"]').check();
-    await page.locator('[data-action="save-vote"]').click();
-    await page.getByText('Your vote has been saved').waitFor();
-    assert.deepEqual(savedVotes,['candidate-b']);
-    console.log('Activity voting uses the same embedded UI');
+    // Keep editing UX visible for desktop/mobile screenshot and overflow checks.
+    await page.locator('[data-action="back"]').click();
+    assert.equal(await page.locator('[data-action="reuse"]').count(),1,
+      'saved usual-week template should appear as a familiar shortcut');
+    await page.locator('[data-action="clock"]').click();
+    await page.getByRole('button',{name:'12-hour clock'}).waitFor();
+    await page.locator('[data-action="clock"]').click();
+    await page.locator('.day-card').nth(1).click();
+    fs.mkdirSync(path.join(process.cwd(),'preview-screens'),{recursive:true});
+    for(const width of [1024,720,375,320]){
+      await page.setViewportSize({width,height:800});
+      const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
+      assert.ok(overflow<=1,'Horizontal overflow at '+width+'px: '+overflow);
+      if(width===1024||width===375){
+        await page.screenshot({path:path.join(process.cwd(),'preview-screens',
+          width===1024?'weekly-activity-desktop.png':'weekly-activity-mobile.png'),
+          fullPage:true});
+      }
+    }
+    assert.equal(errors.length,0,JSON.stringify(errors));
+    console.log('Responsive Activity has no horizontal overflow at 320–1024px.');
+    assert.ok(saves>=1,'draft edits must reach the server; coalescing should reduce round trips');
     await context.close();
 
-    // A normal browser never substitutes for a Discord Activity.
-    const normal=await browser.newPage();
-    await normal.goto(base+'/activity/',{waitUntil:'networkidle'});
-    await normal.getByText('Open inside Discord').waitFor();
-    await normal.close();
-    console.log('Direct browsers receive a clear Discord-only instruction');
+    const outside=await browser.newPage();
+    await outside.goto(base+'/activity/',{waitUntil:'networkidle'});
+    await outside.getByText('Open inside Discord').waitFor();
+    await outside.close();
+    console.log('Non-Discord direct browser login is blocked by design.');
   }finally{
     await browser.close();
     await app.stop();
-    fs.rmSync(dir,{recursive:true,force:true});
+    fs.rmSync(temp,{recursive:true,force:true});
   }
 }
-run().catch(err=>{console.error(err);process.exitCode=1;});
+run().catch(e=>{console.error(e);process.exitCode=1;});

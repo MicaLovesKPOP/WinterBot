@@ -311,3 +311,53 @@ test('test-guild diagnostic command distinguishes enabled and disabled Discord A
     assert.equal(f.sent.length,0,'diagnostics never post public channel messages');
   }finally {f.clean();}
 });
+
+
+test('weekly Activity API is test-guild authenticated, CSRF protected and isolated from legacy voting',async()=>{
+  const f=fixture(), {app,url}=await start(f,12386);
+  try{
+    let response=await fetch(url+'/activity/api/ux/state');
+    assert.equal(response.status,401,'no Activity cookie may access UX data');
+    response=await fetch(url+'/activity/api/token',{
+      method:'POST',headers:headers(f.activity.origin),
+      body:JSON.stringify({code:'valid-weekly-ux-code'}),
+    });
+    assert.equal(response.status,200);
+    const cookie=response.headers.get('set-cookie').split(';')[0];
+
+    response=await fetch(url+'/activity/api/ux/state',{headers:{Cookie:cookie}});
+    assert.equal(response.status,200);
+    const initial=await response.json();
+    assert.equal(initial.round.dates.length,7);
+    assert.equal(initial.progress.answered,0);
+    assert.equal(initial.member.submitted,null);
+    const date=initial.round.dates[0];
+
+    response=await fetch(url+'/activity/api/ux/draft',{
+      method:'POST',headers:headers('https://untrusted.example',{Cookie:cookie}),
+      body:JSON.stringify({days:[{date,status:'unavailable',windows:[]}]}),
+    });
+    assert.equal(response.status,403);
+    response=await fetch(url+'/activity/api/ux/draft',{
+      method:'POST',headers:headers(f.activity.origin,{Cookie:cookie}),
+      body:JSON.stringify({days:[{date,status:'unavailable',windows:[]}]}),
+    });
+    assert.equal(response.status,200);
+    const saved=await response.json();
+    assert.equal(saved.progress.answered,1);
+    assert.equal(saved.member.draft[date].status,'unavailable');
+    assert.equal(saved.member.submitted,null);
+
+    response=await fetch(url+'/activity/api/ux/submit',{
+      method:'POST',headers:headers(f.activity.origin,{Cookie:cookie}),
+      body:JSON.stringify({confirm:true}),
+    });
+    assert.equal(response.status,400,'incomplete week cannot be submitted');
+    response=await fetch(url+'/activity/api/state',{headers:{Cookie:cookie}});
+    assert.equal(response.status,200);
+    const legacy=(await response.json()).round;
+    assert.equal(legacy.dates.length,3,'existing Activity test round untouched');
+    assert.equal(legacy.availability[USER_ID],undefined);
+    assert.equal(f.activity.weeklyUx.store.read().rounds.weekly.members[USER_ID].draft[date].status,'unavailable');
+  }finally{await app.stop();f.clean();}
+});
