@@ -5,7 +5,8 @@ It is deliberately restricted to:
 
 - Discord test guild: 818423564901416991
 - Discord test channel: 1558470955930755162
-- The main Crashday Discord guild is not targeted and remains unchanged.
+- Crashday's real scheduling data, permissions, roles and channels stay untouched.
+  Only its two obsolete test-only preview subcommands are de-registered after restart.
 
 The experiment uses the existing DiscordBotHosting WinterBot process and test-only
 ngrok tunnel, but uses a separate scheduling-activity-test.json data file.
@@ -91,7 +92,23 @@ is already bundled; no new startup command or separate server is needed.
 Open the isolated test channel:
 https://discord.com/channels/818423564901416991/1558470955930755162
 
-Run these as the test-server owner or a member with Manage Server permission:
+Run these as the test-server owner or a member with Manage Server permission.
+
+All experimental **Discord message-based** controls now live here too:
+- **/activitytest tests** explains the available tests and what remains planned.
+- **/activitytest preview-event** simulates moderator event overtime, a grace
+  period and shutdown; it never creates or deletes real event channels.
+- **/activitytest preview-native** posts the older private, native-message
+  availability UX for side-by-side comparison with the Activity.
+- **/activitytest invite** launches the preferred embedded calendar Activity.
+
+After a WinterBot restart, the old **/schedule preview** and
+**/schedule preview-event** commands will no longer be registered in the
+Crashday server. The core /schedule organizer commands are not affected.
+The native prototypes have their own isolated state file; resetting test data
+clears these previews too. See NATIVE_DISCORD_UX_TEST.md for details.
+
+## Activity test walkthrough
 
 1. Run **/activitytest invite**. This posts a fresh invitation only to the test channel.
 2. Click **Open availability planner in Discord**. This launches the embedded Activity,
@@ -159,8 +176,10 @@ Run these as the test-server owner or a member with Manage Server permission:
     (it stays saved) or a locally edited usual-week template (it is discarded).
     Cancel keeps the Activity open. The 12-hour Android/Material dial remains a
     single 1–12 ring with AM/PM; 24-hour mode retains two rings.
-12. **/activitytest reset** removes ONLY the isolated Activity test round AND
-    usual-week templates. It does not modify real events or roles.
+12. **/activitytest reset** removes all isolated test records, including
+    Activity availability/templates, the old native comparison's drafts,
+    and simulated event countdowns. It does not modify real events or roles.
+    Previously posted test controls may stop working after this reset.
 
 The older test-server **/activitytest vote** backend exists for legacy algorithm
 verification, but voting is NOT connected to this focused weekly-calendar UX pilot.

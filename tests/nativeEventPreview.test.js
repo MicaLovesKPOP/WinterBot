@@ -91,10 +91,11 @@ test('event lifecycle controls reject unverified channel and unauthorized modera
   bad.i.channelId='111111111111111111';
   await assert.rejects(()=>manager.start(bad.i),/#bot-logs/);
 });
-test('preview commands are available in TEST mode only',()=>{
+test('Crashday scheduling slash commands no longer register prototype controls',()=>{
   const normal=commandDefinition(false).toJSON().options.map(o=>o.name);
-  const testCmd=commandDefinition(true).toJSON().options.map(o=>o.name);
-  assert.deepEqual(testCmd.slice(-2),['preview','preview-event']);
-  assert.equal(normal.includes('preview'),false);
-  assert.equal(normal.includes('preview-event'),false);
+  const testing=commandDefinition(true).toJSON().options.map(o=>o.name);
+  assert.deepEqual(normal,['create','manage','status']);
+  assert.deepEqual(testing,normal,'Test prototypes belong only to the isolated test guild');
+  assert.equal(testing.includes('preview-event'),false);
+  assert.equal(testing.includes('preview'),false);
 });

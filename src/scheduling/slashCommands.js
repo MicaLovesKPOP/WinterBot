@@ -8,7 +8,7 @@ const { mayUseSetupInteraction } = require('./channelPolicy');
 
 const COMMAND = 'schedule';
 const BLUE = 0x829de9;
-function commandDefinition(testMode = false) {
+function commandDefinition() {
   const command = new SlashCommandBuilder()
     .setName(COMMAND)
     .setDescription('Manage WinterBot availability scheduling')
@@ -16,14 +16,8 @@ function commandDefinition(testMode = false) {
     .addSubcommand(s=>s.setName('create').setDescription('Set up dates and invite verified members'))
     .addSubcommand(s=>s.setName('manage').setDescription('Review availability, votes and event options'))
     .addSubcommand(s=>s.setName('status').setDescription('View recent scheduling rounds'));
-  if (testMode) {
-    command.addSubcommand(s=>s.setName('preview')
-      .setDescription('[TEST ONLY] Post a native Discord availability UX invitation')
-      .addIntegerOption(o=>o.setName('weeks_ahead')
-        .setDescription('Additional weeks after next Monday (0-8)').setMinValue(0).setMaxValue(8)));
-    command.addSubcommand(s=>s.setName('preview-event')
-      .setDescription('[TEST ONLY] Try graceful event shutdown controls'));
-  }
+  // Experimental UI flows are registered only under /activitytest in the
+  // isolated WinterBot test guild, never in the Crashday scheduler commands.
   return command;
 }
 function wizardResponse(baseUrl, testMode = false) {
@@ -65,30 +59,13 @@ function manageResponse(baseUrl, rounds) {
 function attachSchedulingCommands(client, store, context, {logger=console.error}={}) {
   const policy=context.policy;
   const testMode=context.testMode===true;
-  const native = testMode ? require('./nativePrototype').createNativePrototype({
-    policy, testMode:true, logger,
-  }) : null;
   let initialized=false;
-  let eventTimer=null;
   const handler=async interaction=>{
-    if (native && String(interaction.customId || '').startsWith('wbux:')) {
-      await native.handle(interaction);
-      return;
-    }
-    if (native && String(interaction.customId || '').startsWith('wbend:')) {
-      await native.eventPreview.handle(interaction);
-      return;
-    }
     if(!interaction.isChatInputCommand?.() || interaction.commandName!==COMMAND) return;
     try {
       mayUseSetupInteraction(interaction,policy,testMode);
       const cmd=interaction.options.getSubcommand();
-      if(cmd==='preview' && native) {
-        const weeksAhead=interaction.options.getInteger('weeks_ahead') ?? 0;
-        await native.startPreview(interaction,weeksAhead);
-      } else if(cmd==='preview-event' && native) {
-        await native.eventPreview.start(interaction);
-      } else if(cmd==='create') await interaction.reply(wizardResponse(context.baseUrl,testMode));
+      if(cmd==='create') await interaction.reply(wizardResponse(context.baseUrl,testMode));
       else if(cmd==='manage' || cmd==='status') {
         await interaction.reply(manageResponse(context.baseUrl,store.read().rounds));
       } else await interaction.reply({content:'Unknown scheduling action.',flags:MessageFlags.Ephemeral});
@@ -104,21 +81,15 @@ function attachSchedulingCommands(client, store, context, {logger=console.error}
   async function initialize() {
     if(initialized) return;
     const guild=await client.guilds.fetch(policy.guildId);
-    await guild.commands.create(commandDefinition(testMode).toJSON());
+    await guild.commands.create(commandDefinition().toJSON());
     client.on('interactionCreate',handler);
-    if(native) {
-      eventTimer=setInterval(()=>native.eventPreview.tick(client).catch(e=>logger('TEST event tick failed:',e)),10000);
-      eventTimer.unref?.();
-    }
     initialized=true;
   }
   function stop() {
     if(initialized) client.off('interactionCreate',handler);
-    if(eventTimer) clearInterval(eventTimer);
-    eventTimer=null;
     initialized=false;
   }
-  return {initialize,stop,onInteraction:handler,commandDefinition,native};
+  return {initialize,stop,onInteraction:handler,commandDefinition};
 }
 
 module.exports = {commandDefinition,wizardResponse,manageResponse,attachSchedulingCommands};
