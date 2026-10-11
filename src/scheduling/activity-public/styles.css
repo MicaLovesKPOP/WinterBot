@@ -90,7 +90,8 @@ button:hover:not(:disabled){filter:brightness(1.09)}
 .range-top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
 .range-tag{font-size:12px;font-weight:800}
 .range-top .icon-button{border:0;background:none;color:var(--danger);font-size:12px;padding:6px}
-.range-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px}
+.range-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px}
+.range-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-wrap:wrap}
 .field{min-width:0}
 .field label{display:block;color:#b5b8c6;font-size:11px;margin-bottom:7px;font-weight:700}
 .field input,.field select{appearance:auto;background:#171921;border:1px solid #464854;border-radius:9px;color:var(--ink);width:100%;height:42px;padding:9px 10px;font-size:13px}
@@ -189,3 +190,171 @@ button:hover:not(:disabled){filter:brightness(1.09)}
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{transition:none!important;animation:none!important}
 }
+
+
+/*
+ * Discord's embedded Activity is approximately 460 CSS px tall between the
+ * channel header and Activity controls. Keep the whole app in that viewport:
+ * global navigation stays put; only the detailed editor/review list scrolls.
+ * On wide Discord windows show a two-pane workspace; on narrow windows use a
+ * seven-day compact strip above the editor. Fullscreen/tall view stays roomy.
+ */
+@media (max-height: 620px) {
+  html,body,#app{height:100%;min-height:0;overflow:hidden}
+  body{background:var(--bg)}
+  .app-shell{
+    height:100vh;height:100dvh;min-height:0;max-width:none;width:100%;
+    display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;
+    gap:6px;padding:7px 12px;overflow:hidden;
+  }
+  .mast{min-height:32px;padding:0 0 5px;gap:8px}
+  .brand-lockup{gap:8px}
+  .brand-symbol{width:30px;height:30px;border-radius:9px;font-size:19px}
+  .mast .eyebrow{display:none}
+  .brand-name{font-size:15px;letter-spacing:-.02em}
+  .environment-tag{font-size:9px;padding:4px 8px}
+  .hero{
+    padding:0;display:grid;grid-template-columns:minmax(0,1fr) 174px;
+    gap:8px;align-items:center;margin:0;min-height:41px;
+  }
+  .hero-copy>.eyebrow,.hero-copy>p:not(.eyebrow){display:none}
+  .hero h1{font-size:20px;line-height:1.15;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;letter-spacing:-.04em}
+  .progress-panel{padding:0;border:none;background:none;border-radius:0;min-width:0}
+  .progress-top{gap:6px}
+  .progress-top strong{font-size:15px}
+  .progress-top strong span{font-size:12px}
+  .progress-top>span{font-size:10px}
+  .progress-track{height:4px;margin:3px 0}
+  .save-indicator{font-size:10px}
+  .retry-save{font-size:10px}
+  .workspace{display:grid;grid-template-columns:minmax(250px,32%) minmax(0,1fr);
+    gap:9px;min-height:0;min-width:0;height:100%;overflow:hidden}
+  .week-section,.workspace>.editor-card{
+    min-height:0;min-width:0;height:100%;margin:0;overflow-y:auto;overflow-x:hidden;
+    overscroll-behavior:contain;
+    scrollbar-width:thin;scrollbar-color:#4c4e5b transparent;
+    padding:10px;border-radius:12px;border:1px solid var(--border);
+    background:var(--surface);
+  }
+  .week-section .section-title{margin-bottom:7px;gap:5px;display:block}
+  .week-section .section-title .eyebrow{display:none}
+  .week-section .section-title h2{font-size:15px}
+  .week-actions{justify-content:flex-start;width:100%;margin-top:6px;gap:4px}
+  .week-actions .button.minor,
+  .week-actions .text-button{min-height:25px;padding:4px 6px;font-size:10px}
+  .week-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:0}
+  .day-card{min-height:68px;padding:6px;border-radius:9px}
+  .day-card .day-head{font-size:9px;letter-spacing:0}
+  .day-card strong{font-size:20px;margin-top:2px}
+  .day-card .day-mark{width:16px;height:16px;font-size:11px;border-radius:5px}
+  .day-status{font-size:9px;margin-top:5px}
+  .small-note{font-size:10px;margin:6px 0 0}
+  .workspace>.editor-card{padding:10px;box-shadow:none}
+  .editor-heading{margin-bottom:7px}
+  .editor-heading .eyebrow{display:none}
+  .editor-heading h2{font-size:16px}
+  .pill{font-size:10px;padding:4px 8px}
+  .choice-row{gap:5px;margin:0 0 6px}
+  .button{font-size:11px;min-height:30px;padding:5px 9px;border-radius:8px}
+  .choice-row .button{min-height:28px;padding:4px 8px}
+  .button.minor{min-height:25px;font-size:10px;padding:3px 7px}
+  .hint{font-size:11px;line-height:1.35;margin:4px 0 7px}
+  .time-visual{margin:5px 0 7px}
+  .time-track{height:15px;border-radius:5px}
+  .time-ticks{height:14px;font-size:9px}
+  .time-ticks span{top:2px}
+  .range-row{padding:9px;border-radius:9px;margin:6px 0;background:#1a1b22}
+  .range-top{margin-bottom:5px;gap:6px}
+  .range-tag{font-size:11px}
+  .range-top .icon-button{padding:2px 4px;font-size:11px}
+  .range-grid{gap:7px;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .field label{font-size:10px;margin-bottom:4px}
+  .field input,.field select{height:32px;border-radius:7px;padding:3px 6px;font-size:11px}
+  .end-of-day{min-height:32px;padding:3px 5px;font-size:10px}
+  .time-control{gap:4px}
+  .editor-footer{margin-top:7px;gap:6px}
+  .empty-editor{padding:12px;border-radius:9px}
+  .empty-editor strong{font-size:13px}
+  .empty-editor p{font-size:11px;margin:3px auto}
+  .batch-fields{margin:7px 0;gap:7px}
+  .notice-inline{margin:6px 0;font-size:11px;padding:6px 8px}
+  .action-footer{position:relative;z-index:3;bottom:auto;margin:0;min-height:40px;
+    padding:5px 9px;border-radius:10px;gap:8px;box-shadow:none;
+    backdrop-filter:none;background:var(--surface-raised)}
+  .action-footer strong{font-size:11px;margin:0}
+  .action-footer small{display:none}
+  .action-footer .button{min-height:30px;font-size:11px}
+  .privacy-note{display:none}
+  .message{position:absolute;z-index:5;top:43px;left:12px;right:12px;
+    margin:0;padding:7px 12px;font-size:11px;box-shadow:0 7px 20px #0007}
+  .review-card,.receipt{height:100%;min-height:0;min-width:0;
+    display:flex;flex-direction:column;overflow:hidden;margin:0;
+    padding:11px;box-shadow:none}
+  .review-card>.section-title{margin-bottom:5px}
+  .review-card>.section-title .eyebrow{display:none}
+  .review-card h2{font-size:17px}
+  .review-card>.hint{margin:3px 0 6px}
+  .review-list{min-height:0;flex:1;overflow:auto;scrollbar-width:thin;
+    margin:6px 0;overscroll-behavior:contain}
+  .review-row{min-height:34px;gap:8px;padding:5px 10px}
+  .bottom-actions{margin-top:6px;flex-shrink:0}
+  .receipt-icon{width:32px;height:32px;font-size:20px;border-radius:10px;
+    margin:0 auto 4px}
+  .receipt h2{font-size:18px;margin:3px 0}
+  .receipt>p:not(.eyebrow){margin:0 auto 5px;font-size:11px;line-height:1.4}
+  .receipt>.eyebrow{display:none}
+  .overlay{padding:8px}
+  .dialog{max-height:calc(100dvh - 18px);padding:13px}
+  .dialog-header h2{font-size:16px}
+  .copy-list,.preview-list{max-height:230px}
+}
+@media (max-height: 620px) and (max-width: 720px) {
+  .app-shell{padding:6px 9px;gap:5px}
+  .mast{min-height:30px;padding:0 0 4px}
+  .brand-symbol{width:28px;height:28px}
+  .hero{min-height:39px;grid-template-columns:minmax(0,1fr) 95px;gap:6px}
+  .hero h1{font-size:16px}
+  .progress-top strong{font-size:13px}
+  .progress-top strong span{font-size:10px}
+  .progress-top>span{display:none}
+  .save-indicator{font-size:9px;white-space:nowrap}
+  .workspace{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);
+    gap:6px;min-width:0}
+  .week-section{height:auto;min-height:0;overflow:visible;
+    border:0;background:transparent;padding:0;border-radius:0}
+  .week-section .section-title{display:flex;flex-wrap:nowrap;
+    align-items:center;justify-content:space-between;margin-bottom:4px}
+  .week-section .section-title h2{font-size:13px}
+  .week-actions{width:auto;margin:0;flex-wrap:nowrap;gap:3px}
+  .week-actions .button.minor,
+  .week-actions .text-button{min-height:25px;padding:4px 6px;font-size:9px}
+  .week-grid{grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+  .day-card{min-height:53px;height:53px;padding:4px 3px;border-radius:7px;
+    text-align:center}
+  .day-card .day-head{font-size:8px;text-align:center;gap:2px}
+  .day-card .day-mark{width:13px;height:13px;font-size:9px;border-radius:4px}
+  .day-card strong{font-size:18px;margin-top:3px}
+  .day-status{display:none}
+  .small-note{font-size:9px;margin:3px 0 0}
+  .workspace>.editor-card{min-height:0;overflow-y:auto;
+    border-radius:9px;padding:8px}
+  .range-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .batch-fields{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .editor-heading h2{font-size:14px}
+  .choice-row .button{font-size:10px;padding:4px 7px}
+  .hint{font-size:10px}
+  .review-row{grid-template-columns:1.1fr 1.6fr auto}
+  .action-footer{min-height:34px;padding:4px 8px}
+  .action-footer .button{min-height:27px}
+  .message{left:9px;right:9px}
+}
+@media (max-height: 620px) and (max-width: 380px) {
+  .week-section .section-title{flex-wrap:wrap}
+  .week-actions{width:100%;justify-content:flex-start}
+  .day-card strong{font-size:16px}
+  .batch-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+.review-scroll-hint{color:var(--warn);font-size:11px;margin:4px 0 2px}
+.review-scroll-hint[hidden]{display:none}

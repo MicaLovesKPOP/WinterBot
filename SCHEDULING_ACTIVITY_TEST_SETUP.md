@@ -118,6 +118,15 @@ Do not use it as an end-to-end test of the new Activity's voting interface.
 ### UX prototype implementation
 
 - Seven-day, locally responsive Activity UI with desktop/mobile layouts.
+- Optimized for the measured Discord Activity viewport: approximately 460 CSS px
+  high, 462 px wide in the narrow window and 1018 px wide in the large window.
+  Wide layout places the week and editor in separate panes; narrow layout uses
+  a single compact row of seven day cards above the editor. The Activity footer
+  stays visible and the detailed editor scrolls internally for additional windows.
+- Review keeps its confirmation controls visible; if the complete list does not
+  fit, participants must scroll to the bottom before they can submit.
+- Certainty per window is a short Available/Tentative toggle rather than an
+  extra dropdown; optional duration limits remain independently selectable.
 - Private test-only data file: scheduling-activity-weekly-ux.json; production
   scheduling.json and the legacy Activity test state remain untouched.
 - Confirmed and tentative ranges, five-minute precision, optional duration limits,

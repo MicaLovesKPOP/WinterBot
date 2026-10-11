@@ -120,7 +120,7 @@ async function run(){
     assert.equal(await page.locator('.day-card.state-off').count(),1);
     await page.locator('.day-card').nth(1).click();
     await page.locator('[data-field="start"]').first().fill('19:30');
-    await page.locator('[data-field="kind"]').first().selectOption('tentative');
+    await page.locator('[data-action="toggle-kind"]').first().click();
     await page.getByText('Tentative hours').waitFor();
     console.log('Local editing remains immediate during background saves.');
 
@@ -142,12 +142,31 @@ async function run(){
       await page.locator('.day-card').nth(n).click();
       await page.locator('[data-action="all-day"]').click();
     }
+    await page.setViewportSize({width:462,height:460});
     await page.locator('[data-action="review"]').click();
     await page.getByRole('heading',{name:'Review your availability'}).waitFor();
+    await page.getByText('Scroll through all dates to enable submission.').waitFor();
+    assert.equal(await page.locator('[data-action="submit"]').isDisabled(),true,
+      'On a short viewport, users must scroll through the review before submitting');
+    await page.locator('.review-list').evaluate(el=>{
+      el.scrollTop=el.scrollHeight;
+      el.dispatchEvent(new Event('scroll',{bubbles:true}));
+    });
     await page.locator('[data-action="submit"]:not([disabled])').waitFor();
     fs.mkdirSync(path.join(process.cwd(),'preview-screens'),{recursive:true});
     await page.screenshot({path:path.join(process.cwd(),'preview-screens','weekly-activity-review.png'),
       fullPage:true});
+    const reviewBounds=await page.evaluate(()=>{
+      const card=document.querySelector('.review-card');
+      const actions=document.querySelector('.review-card .bottom-actions');
+      return {documentHeight:document.documentElement.scrollHeight,viewportHeight:innerHeight,
+        cardBottom:card?.getBoundingClientRect().bottom,
+        actionsBottom:actions?.getBoundingClientRect().bottom};
+    });
+    assert.ok(reviewBounds.documentHeight<=reviewBounds.viewportHeight+1,
+      'Final review should not scroll the entire Activity at 460px: '+JSON.stringify(reviewBounds));
+    assert.ok(reviewBounds.actionsBottom<=460,'Submit controls must be visible in the fixed review');
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','weekly-activity-review-compact.png')});
     await page.locator('[data-action="submit"]').click();
     await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
     assert.ok(state.member.submitted);
@@ -176,8 +195,74 @@ async function run(){
           fullPage:true});
       }
     }
+    // The real Discord Activity is about 460px tall, at widths roughly
+    // 462px (narrow) to 1018px (wide). Test the actual embedded viewport,
+    // not just a conventional tall mobile/desktop browser.
+    for(const [width,name] of [[1018,'wide'],[462,'narrow']]){
+      await page.setViewportSize({width,height:460});
+      const metrics=await page.evaluate(()=>{
+        const rect=query=>{const el=document.querySelector(query);
+          if(!el)return null;const r=el.getBoundingClientRect();
+          return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,height:r.height};
+        };
+        const cards=[...document.querySelectorAll('.day-card')].map(e=>{
+          const r=e.getBoundingClientRect();return {top:r.top,bottom:r.bottom,
+            left:r.left,right:r.right,width:r.width};
+        });
+        return {innerHeight,innerWidth,bodyHeight:document.body.scrollHeight,
+          pageHeight:document.documentElement.scrollHeight,
+          documentWidth:document.documentElement.scrollWidth,
+          mast:rect('.mast'),hero:rect('.hero'),week:rect('.week-section'),
+          workspace:rect('.workspace'),editor:rect('.editor-card'),
+          footer:rect('.action-footer'),cards,
+          editorScroll:document.querySelector('.editor-card').scrollHeight,
+          editorClient:document.querySelector('.editor-card').clientHeight,
+          footerAccessible:(()=>{
+            const btn=document.querySelector('.action-footer button');
+            if(!btn)return false;const r=btn.getBoundingClientRect();
+            const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+            return hit===btn||btn.contains(hit);
+          })()};
+      });
+      assert.ok(metrics.pageHeight<=461,'Document scrolls beyond 460px in '+name+': '+JSON.stringify(metrics));
+      assert.ok(metrics.documentWidth<=width+1,'Horizontal overflow in '+name);
+      assert.ok(metrics.footer?.bottom<=461&&metrics.footer?.top>=0,
+        'Primary action footer hidden in '+name+': '+JSON.stringify(metrics));
+      assert.equal(metrics.footerAccessible,true,
+        'Primary footer button must be clickable, not covered by the editor in '+name);
+      assert.ok(metrics.workspace.height>160,'Editor workspace too short in '+name);
+      assert.ok(metrics.cards.every(c=>c.left>=0&&c.right<=width+1),
+        'Calendar day cards spill outside viewport in '+name);
+      if(name==='narrow')assert.ok(metrics.cards.every(c=>Math.abs(c.top-metrics.cards[0].top)<2),
+        'The seven days should remain on one compact row at narrow width');
+      await page.screenshot({path:path.join(process.cwd(),'preview-screens','weekly-activity-460-'+name+'.png')});
+      if(name==='narrow'){
+        // Complicated availability must scroll inside the editor, never cause
+        // the Discord Activity frame or fixed review control to scroll away.
+        await page.locator('[data-action="add-window"]').click();
+        assert.equal(await page.locator('.range-row').count(),2);
+        const details=await page.evaluate(()=>{
+          const editor=document.querySelector('.editor-card');
+          const footer=document.querySelector('.action-footer button');
+          const r=footer.getBoundingClientRect();
+          return {documentHeight:document.documentElement.scrollHeight,
+            internalScroll:editor.scrollHeight>editor.clientHeight,
+            footerVisible:r.top>=0&&r.bottom<=innerHeight};
+        });
+        assert.ok(details.internalScroll,'Additional windows must scroll inside the editor');
+        assert.equal(details.footerVisible,true,'Review must stay visible after adding windows');
+        assert.ok(details.documentHeight<=461,'Two windows must not create outer scrolling');
+        await page.screenshot({path:path.join(process.cwd(),'preview-screens',
+          'weekly-activity-460-narrow-two-windows.png')});
+      }
+      console.log('Discord-size Activity '+name+': workspace='+
+        Math.round(metrics.workspace.height)+'px; editor viewport='+
+        Math.round(metrics.editor.height)+'px; internal scroll='+
+        (metrics.editorScroll>metrics.editorClient)+
+        '; footer='+JSON.stringify(metrics.footer)+'; week='+JSON.stringify(metrics.week));
+    }
     assert.equal(errors.length,0,JSON.stringify(errors));
-    console.log('Responsive Activity has no horizontal overflow at 320–1024px.');
+    console.log('Responsive Activity stays inside a 460px Discord frame at both widths.');
     assert.ok(saves>=1,'draft edits must reach the server; coalescing should reduce round trips');
     await context.close();
 
