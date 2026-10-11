@@ -6,7 +6,9 @@
 
 **Implemented, awaiting real Discord verification:** opt-in live browser sign-in via Discord OAuth2, guild membership/organizer permission checks, channel invitation announcements, and real Discord Scheduled Event creation (voice-channel or external) with duplicate reconciliation.
 
-**Not yet provided:** the Discord Embedded App SDK Activity launcher, public HTTPS hosting, and live testing with real Discord credentials. The web planner works in a normal browser; it is *not yet* an embedded Activity.
+**Ready for private Discord hands-on testing:** the embedded Discord Activity weekly availability editor is now hosted through GitHub Pages and a test-only authenticated API. Its `/activitytest invite` and `/activitytest next-week` commands are registered in Mica's private test server. A separate, connected **native Discord journey** (`/activitytest organizer`, `/activitytest results`, `/activitytest checkin`) reuses the real optimizer and voting core with private-channel message controls. See [NATIVE_JOURNEY_TEST.md](NATIVE_JOURNEY_TEST.md) and [SCHEDULING_ACTIVITY_TEST_SETUP.md](SCHEDULING_ACTIVITY_TEST_SETUP.md).
+
+**Not yet integrated for production:** the Activity's weekly submissions and organizer rounds use distinct test stores and precision. A member can explicitly **preview and import a reviewed Activity week** into a matching test organizer round (rounding inward from 5- to 15-minute boundaries and excluding tentative hours from confirmed attendance), without changing the original Activity submission. The fully automatic association, native tentative semantics and 5-minute core optimization remain future integrations. Event-role access, event-channel creation, check-in and cleanup in the connected test journey are **simulations**, not actual Discord permission or channel operations. Actual test-server permission validation and live rollout remain separate milestones.
 
 The existing scheduled-event registration tracker is left untouched. Scheduling is **disabled by default** in WinterBot.js. The scheduler's Node module is lazy-loaded only when SCHEDULING_ENABLED=1. Bad scheduler configuration or an unavailable HTTP port is logged without stopping the original bot.
 
@@ -116,7 +118,7 @@ Bot permissions: **Create Events** for real scheduled events, plus View Channel,
 
 The organizer starts the setup from the Mod channel using /schedule create (or in #bot-logs while test mode is enabled). Creating a round automatically posts its invitation to League by default, Public if explicitly selected, or only #bot-logs during testing. The invitation updates in place as availability/voting closes. Real confirmed events each produce a separate event announcement. These live Discord paths require testing with valid credentials before production rollout.
 
-**The code does not yet implement a Discord Activity launch.** A fully embedded Activity needs the Discord Embedded App SDK, Activity URL mappings and authorization flow. Keep the normal mobile browser as a fallback when adding it.
+**An isolated Discord Activity launch is now implemented for the private test guild.** It uses the Embedded App SDK, Pages static hosting and authenticated API mappings described in SCHEDULING_ACTIVITY_TEST_SETUP.md. The original browser planner remains a separate fallback; neither is yet enabled as a live Crashday event workflow.
 
 ### Safe rollout / rollback
 
@@ -143,8 +145,9 @@ The UI smoke test requires Microsoft Edge on Windows (or a browser path in WINTE
 
 1. Verify a complete live OAuth2 login and real Discord event creation in a dedicated test server, including required permissions and the existing event-registration tracker.
 2. Add deadline reminders/notification preferences (channel or DM), if desired.
-3. Integrate the Embedded App SDK and native Discord Activity launch, keeping this browser planner as a fallback.
-4. Add organizer archive and round management, saved weekly templates and explicit cross-midnight support as separate follow-ups.
+3. Connect the existing Activity's reviewed weekly availability with organizer rounds and the core optimizer, preserving tentative semantics and 5-minute precision.
+4. In the isolated test server, validate real (opt-in) role/channel creation, check-in permissions, cleanup and persistent moderator-only archives before production integration. The current Discord message journey only simulates those operations.
+5. Finish organizer defaults, notification controls and verified live role/permission checks before any Crashday rollout.
 
 ## Architecture
 

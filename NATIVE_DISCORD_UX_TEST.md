@@ -18,12 +18,21 @@ As the test-server owner or a moderator with Manage Server permissions,
 use the following commands **in #winterbot-testing**:
 
     /activitytest tests
+    /activitytest organizer
+    /activitytest results
+    /activitytest checkin
     /activitytest preview-event
     /activitytest preview-native
 
-The new /activitytest tests command shows available and planned tests.
+The /activitytest tests command shows available and planned tests.
+The connected organizer → invitation → attendance results → voting → check-in
+simulation is described in **NATIVE_JOURNEY_TEST.md**. It restores existing
+optimizer/voting engine functionality and adds native-message controls.
 The preferred availability editor remains /activitytest invite (the Activity).
-Use preview-native only to compare native message-based editing with the Activity.
+A participant can **explicitly import** their reviewed Activity week via a
+native organizer invitation, after inspecting 5-to-15-minute conversion and
+excluded tentative periods. Nothing imports automatically.
+Use preview-native only for the old message UX comparison.
 
 Any private test-channel member can open the native availability invitation and
 edit their own ephemeral draft. Only test moderators can post invitations or
@@ -60,15 +69,20 @@ The Activity remains the primary, more polished availability interface.
 - /activitytest status: checks Discord Activity configuration.
 - /activitytest vote: separate legacy scheduling/vote algorithm test, **not**
   connected to the new Activity's submitted weekly availability.
-- /activitytest reset: resets all **isolated** Activity, native and simulated
-  event test stores. Old test invitation/event buttons become obsolete.
+- /activitytest reset: resets all **isolated** Activity, native, connected
+  planning-journey and simulated event test stores. Old buttons become obsolete.
 
-## Planned (NOT available yet)
+## Simulated vs real behavior
 
-A polished organizer setup flow, attendance-result presentation, participant
-voting end to end, check-ins, event-role unlocking, temporary text/voice
-channels and moderator-only archives. Build/validate these here before any
-real-server integration.
+The organizer setup, ranked attendance suggestions and optional preference
+voting now have a connected native-message **test journey** backed by the
+existing scheduling core. Check-ins, event roles, private channels, overtime,
+grace periods, and moderator read-only archives are **simulated only**;
+Discord permissions, roles, channels and real events are not altered.
+
+Still pending: connecting the preferred Activity submissions to that round,
+actual test-server role/channel lifecycle validation, and production rollout.
+See **NATIVE_JOURNEY_TEST.md** for a precise test plan and known boundaries.
 
 ## Verification
 

@@ -445,13 +445,14 @@ test('all isolated test commands register only in Mica test guild, not Crashday'
     assert.equal(f.commands.length,1,'Only /activitytest is registered by the test subsystem');
     const definitions=f.commands[0].options.map(option=>option.name);
     assert.deepEqual(definitions,
-      ['invite','status','vote','reset','next-week','preview-native','preview-event','tests']);
+      ['invite','status','vote','reset','next-week','preview-native','preview-event',
+        'organizer','results','checkin','tests']);
     const help=fakeInteraction('command','tests');
     await f.activity.onInteraction(help.x);
     assert.match(help.calls.reply.content,/preview-event/);
     assert.match(help.calls.reply.content,/preview-native/);
-    assert.match(help.calls.reply.content,/not yet integrated/i);
-    assert.match(help.calls.reply.content,/still to build/i);
+    assert.match(help.calls.reply.content,/calendar Activity/i);
+    assert.match(help.calls.reply.content,/nothing grants permissions/i);
     const wrong=fakeInteraction('command','preview-event','199916140183420928',CHANNEL_ID);
     await f.activity.onInteraction(wrong.x);
     assert.match(wrong.calls.reply.content,/test channel/);
@@ -566,4 +567,108 @@ test('native availability comparison is open to test-channel participants but on
     assert.deepEqual(state.templates,{});
     assert.equal(f.activity.weeklyUx.store.read().rounds.weekly.members[USER_ID],undefined);
   }finally{f.activity.stop();f.clean();}
+});
+
+
+test('integrated organizer, results and check-in commands route only through private test guild',async()=>{
+  const f=fixture();
+  try{
+    await f.activity.start();
+    const commands=f.commands[0].options.map(x=>x.name);
+    for(const cmd of ['organizer','results','checkin'])
+      assert.ok(commands.includes(cmd),'Missing /activitytest '+cmd);
+    const owner=fakeInteraction('command','organizer');
+    await f.activity.onInteraction(owner.x);
+    assert.match(owner.calls.reply.embeds[0].toJSON().title,/Organizer journey/);
+    const emptyResults=fakeInteraction('command','results');
+    await f.activity.onInteraction(emptyResults.x);
+    assert.match(emptyResults.calls.reply.embeds[0].toJSON().title,/Organizer journey/);
+    const emptyCheckin=fakeInteraction('command','checkin');
+    await f.activity.onInteraction(emptyCheckin.x);
+    assert.match(emptyCheckin.calls.reply.embeds[0].toJSON().title,/Check-in/);
+
+    const open=fakeInteraction('button');
+    open.x.customId='wbflow:new';
+    await f.activity.onInteraction(open.x);
+    assert.equal(open.calls.modal.toJSON().components.length,5);
+    const modal=fakeInteraction('modal');
+    modal.x.customId='wbflow:new';
+    modal.x.fields={getTextInputValue:k=>({
+      title:'Test Organizer Night',first:'2026-10-19',days:'3',
+      hours:'18:00-24:00',duration:'120',
+    }[k]||'')};
+    await f.activity.onInteraction(modal.x);
+    assert.match(modal.calls.reply.embeds[0].toJSON().title,/Organizer/);
+    const journeys=Object.values(f.activity.nativeJourney.store.read().journeys);
+    assert.equal(journeys.length,1);
+    assert.equal(journeys[0].round.testMode,true);
+
+    const wrongGuild=fakeInteraction('button','invite','199916140183420928');
+    wrongGuild.x.customId='wbflow:sample:'+journeys[0].id;
+    await f.activity.onInteraction(wrongGuild.x);
+    assert.equal(wrongGuild.calls.reply,undefined);
+    const wrongChannel=fakeInteraction('button','invite',GUILD_ID,'777777777777777777');
+    wrongChannel.x.customId='wbflow:sample:'+journeys[0].id;
+    await f.activity.onInteraction(wrongChannel.x);
+    assert.equal(wrongChannel.calls.reply,undefined);
+
+    const sample=fakeInteraction('button');
+    sample.x.customId='wbflow:sample:'+journeys[0].id;
+    await f.activity.onInteraction(sample.x);
+    assert.equal(f.activity.nativeJourney.read(journeys[0].id).sampleIds.length,8);
+
+    const reset=fakeInteraction('command','reset');
+    await f.activity.onInteraction(reset.x);
+    assert.deepEqual(f.activity.nativeJourney.store.read().journeys,{});
+    assert.equal(f.activity.nativeTest.store.read().events &&
+      Object.keys(f.activity.nativeTest.store.read().events).length,0);
+    assert.equal(f.activity.store.read().rounds.length,1,
+      'Reset retains the isolated Activity demo fixture but clears the journeys');
+  }finally{f.activity.stop();f.clean();}
+});
+
+
+test('reviewed calendar Activity week explicitly imports into a native organizer round',async()=>{
+  const f=fixture();
+  try{
+    await f.activity.start();
+    const uid=USER_ID;
+    const weekly=(await f.activity.weeklyUx.read(uid)).round.dates;
+    const data=weekly.map(date=>({
+      date,status:'available',
+      windows:[{start:'19:05',end:'23:00',kind:'confirmed',maxMinutes:null}],
+    }));
+    await f.activity.weeklyUx.mutate(uid,'draft',{days:data});
+    await f.activity.weeklyUx.mutate(uid,'review',{confirmReview:true});
+    await f.activity.weeklyUx.mutate(uid,'submit',{confirm:true});
+
+    const modal=fakeInteraction('modal');
+    modal.x.customId='wbflow:new';
+    modal.x.fields={getTextInputValue:k=>({
+      title:'Activity bridge check',first:weekly[0],days:'7',
+      hours:'12:00-24:00',duration:'120',
+    }[k]||'')};
+    await f.activity.onInteraction(modal.x);
+    const j=Object.values(f.activity.nativeJourney.store.read().journeys)[0];
+    assert.ok(j);
+    const preview=fakeInteraction('button');
+    preview.x.customId='wbflow:import:'+j.id;
+    await f.activity.onInteraction(preview.x);
+    assert.match(preview.calls.reply.embeds[0].toJSON().title,/Review Activity import/);
+    assert.match(preview.calls.reply.embeds[0].toJSON().description,/19:15–23:00/);
+    assert.equal(f.activity.nativeJourney.read(j.id).round.participants.length,0);
+
+    const confirm=fakeInteraction('button');
+    confirm.x.customId='wbflow:importconfirm:'+j.id;
+    await f.activity.onInteraction(confirm.x);
+    assert.match(confirm.calls.update.embeds[0].toJSON().title,/Activity week imported/);
+    const imported=f.activity.nativeJourney.read(j.id);
+    assert.equal(imported.round.participants.length,1);
+    assert.equal(imported.round.availability[uid][weekly[0]].windows[0].start,'19:15');
+    assert.equal((await f.activity.weeklyUx.read(uid)).member.submitted[weekly[0]]
+      .windows[0].start,'19:05','The source Activity submission remains unchanged');
+  }finally{
+    f.activity.stop();
+    f.clean();
+  }
 });
