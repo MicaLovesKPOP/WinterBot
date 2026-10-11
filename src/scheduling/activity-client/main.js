@@ -378,14 +378,22 @@ function actionError(error){
   render();
 }
 function request(path,body){
-  const settings={credentials:'include',headers:{Accept:'application/json'}};
+  // Discord maps /api to the free ngrok tunnel, but its proxy does not
+  // automatically bypass ngrok's browser-warning interstitial. The static
+  // Activity itself is instead served from GitHub Pages.
+  const settings={credentials:'include',headers:{
+    Accept:'application/json','ngrok-skip-browser-warning':'1',
+  }};
   if(body!==undefined){
     settings.method='POST';settings.headers['Content-Type']='application/json';
     settings.headers['X-WinterBot-Activity']='1';settings.body=JSON.stringify(body);
   }
   return fetch('./api/'+path,settings).then(async response=>{
+    const type=response.headers.get('content-type')||'';
+    if(!type.includes('application/json'))
+      throw Error('WinterBot API was not reachable. Check the /api Activity URL Mapping.');
     let data;
-    try{data=await response.json();}catch{throw Error('WinterBot returned an unreadable response.');}
+    try{data=await response.json();}catch{throw Error('WinterBot returned invalid JSON.');}
     if(!response.ok)throw Error(data.error||'Request failed ('+response.status+').');
     return data;
   });

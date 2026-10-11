@@ -57,6 +57,8 @@ async function run(){
     page.on('pageerror',e=>errors.push(e.message));
     await page.route('**/activity/api/**',async route=>{
       const request=route.request(),pathname=new URL(request.url()).pathname;
+      assert.equal(request.headers()['ngrok-skip-browser-warning'],'1',
+        'Activity API must bypass the ngrok free-tier warning through Discord proxy');
       const body=request.postDataJSON?.()||{};
       if(pathname.endsWith('/config'))return route.fulfill(json({clientId}));
       if(pathname.endsWith('/token'))return route.fulfill(json({access_token:'mock-token'}));
