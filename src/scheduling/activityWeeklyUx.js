@@ -7,7 +7,7 @@ const {DateTime}=require('luxon');
 const {
   PreviewStore,makeRound,memberOf,normalizedDay,applyDays,
   applyTemplate,confirmSubmission,templateFromSubmission,reviewSnapshot,
-  isComplete,assert,
+  isComplete,DAY_KEYS,assert,
 }=require('./nativePrototypeState');
 
 function toMinute(value){
@@ -94,6 +94,29 @@ function createActivityWeeklyUx({dataFile,now=()=>new Date()}={}) {
       } else if(action==='template-save') {
         assert(body.confirm===true,'Confirm the weekly template update.');
         state.templates[userId]=templateFromSubmission(round,member);
+      } else if(action==='discard-revision') {
+        assert(body.confirm===true,'Confirm discarding the unsubmitted changes.');
+        assert(member.submitted,'There is no submitted week to restore.');
+        member.draft=structuredClone(member.submitted);
+        member.reviewedSnapshot=null;
+        member.undo=null;
+        member.pending=null;
+        member.selection=[];
+      } else if(action==='template-update') {
+        assert(body.confirm===true,'Confirm saving your usual week.');
+        assert(body.days&&typeof body.days==='object'&&!Array.isArray(body.days),
+          'Provide weekday availability.');
+        const entries=Object.entries(body.days);
+        assert(entries.length>0&&entries.length<=7&&
+          entries.every(([day])=>DAY_KEYS.includes(day)),
+          'Choose one or more valid weekdays.');
+        const next={};
+        for(const [weekday,value] of entries){
+          if(value==null)continue;
+          next[weekday]=normalizedDay(value);
+        }
+        assert(Object.keys(next).length>0,'Add availability for at least one weekday.');
+        state.templates[userId]=next;
       } else if(action==='template-apply') {
         assert(body.confirm===true,'Confirm before applying your usual week.');
         applyTemplate(member,round,state.templates[userId]);

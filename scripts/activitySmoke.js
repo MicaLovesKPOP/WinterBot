@@ -86,6 +86,19 @@ async function run(){
         state.member.submittedAt=new Date().toISOString();
         return route.fulfill(json(snap()));
       }
+      if(pathname.endsWith('/ux/discard-revision')){
+        if(!body.confirm||!state.member.submitted)
+          return route.fulfill(json({error:'No confirmed submission to restore.'},400));
+        state.member.draft=structuredClone(state.member.submitted);
+        serverReviewed=null;state.progress.reviewed=false;
+        return route.fulfill(json(snap()));
+      }
+      if(pathname.endsWith('/ux/template-update')){
+        if(!body.confirm||!Object.keys(body.days||{}).length)
+          return route.fulfill(json({error:'Review your usual week.'},400));
+        state.template=structuredClone(body.days);
+        return route.fulfill(json(snap()));
+      }
       if(pathname.endsWith('/ux/template-save')){
         state.template=Object.fromEntries(dates.map((d,i)=>[
           ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][i],
@@ -247,11 +260,36 @@ async function run(){
       await page.locator('.day-card').nth(n).click();
       await page.locator('[data-action="all-day"]').click();
     }
+    // The review must compactly list multiple time ranges with NO empty rows
+    // between them. Build a realistic confirmed/tentative/confirmed Sunday.
+    await page.locator('.day-card').nth(6).click();
+    await page.locator('[data-action="clear-day"]').click();
+    const addSundayWindow=async(sh,sm,eh,em,tentative=false)=>{
+      await page.locator('[data-action="add-window"]').click();
+      await page.locator('.clock-number[data-value="'+sh+'"]').click();
+      await page.locator('.clock-number[data-value="'+sm+'"]').click();
+      await page.locator('.clock-number[data-value="'+eh+'"]').click();
+      await page.locator('.clock-number[data-value="'+em+'"]').click();
+      await page.locator('[data-action="clock-save"]').click();
+      if(tentative)await page.locator('[data-action="toggle-kind"]').last().click();
+    };
+    await addSundayWindow(8,0,11,0);
+    await addSundayWindow(11,0,13,30,true);
+    await addSundayWindow(13,30,21,0);
     await page.setViewportSize({width:462,height:460});
     await page.locator('[data-action="review"]').click();
     await page.getByRole('heading',{name:'Review your availability'}).waitFor();
     assert.equal(await page.locator('.review-row .mini-time-bar').count(),7,
       'All seven review dates get compact timelines');
+    assert.equal(await page.locator('.review-row').nth(6)
+      .locator('.review-time-labels .status-label').count(),3,
+      'A day with three ranges must have exactly three compact time labels');
+    assert.equal(await page.locator('.review-row .window-separator').count(),0,
+      'No separator grid cells or blank rows between time windows');
+    assert.equal(await page.locator('.review-row').nth(6)
+      .locator('.bar-segment.confirmed').count(),2);
+    assert.equal(await page.locator('.review-row').nth(6)
+      .locator('.bar-segment.tentative').count(),1);
     assert.equal(await page.locator('.review-row').nth(1)
       .locator('.bar-segment.tentative').count(),1);
     assert.match(await page.locator('.review-row').nth(1)
@@ -273,6 +311,8 @@ async function run(){
     });
     await page.locator('[data-action="submit"]:not([disabled])').waitFor();
     fs.mkdirSync(path.join(process.cwd(),'preview-screens'),{recursive:true});
+    await page.locator('.review-row').last().scrollIntoViewIfNeeded();
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','multi-window-review-compact.png')});
     await page.screenshot({path:path.join(process.cwd(),'preview-screens','weekly-activity-review.png'),
       fullPage:true});
     const reviewBounds=await page.evaluate(()=>{
@@ -289,11 +329,73 @@ async function run(){
     await page.locator('[data-action="submit"]').click();
     await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
     assert.ok(state.member.submitted);
-    await page.locator('[data-action="save-template"]').click();
-    await page.locator('[data-action="confirm-popup"]').click();
-    await page.getByText('Usual week saved for future rounds.').waitFor();
+    const originalSubmission=structuredClone(state.member.submitted);
+    await page.locator('[data-action="open-template"]').click();
+    await page.getByRole('heading',{name:'Your usual week',exact:true}).waitFor();
+    await page.setViewportSize({width:320,height:460});
+    const narrowTemplate=await page.evaluate(()=>{
+      const footer=document.querySelector('.template-footer');
+      const rect=footer.getBoundingClientRect();
+      return {
+        width:document.documentElement.scrollWidth,
+        height:document.documentElement.scrollHeight,
+        footerBottom:rect.bottom,
+        buttons:[...footer.querySelectorAll('button')].map(btn=>{
+          const r=btn.getBoundingClientRect();return {left:r.left,right:r.right,bottom:r.bottom};
+        }),
+      };
+    });
+    assert.ok(narrowTemplate.width<=321&&narrowTemplate.height<=461&&
+      narrowTemplate.footerBottom<=461&&
+      narrowTemplate.buttons.every(b=>b.left>=0&&b.right<=321&&b.bottom<=461),
+      'Template footer must remain fully usable at 320x460: '+JSON.stringify(narrowTemplate));
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens',
+      'usual-week-template-editor-320x460.png')});
+    await page.setViewportSize({width:462,height:460});
+    assert.equal(await page.locator('.day-card').count(),7);
+    assert.equal(await page.locator('.day-card.state-off').count(),1,
+      'Template initially copies actual submitted answers, not defaults');
+    await page.locator('.day-card').nth(2).click();
+    await page.locator('[data-action="all-day"]').click();
+    assert.equal(state.template,null,'Editing a template must never autosave it');
+    assert.deepEqual(state.member.submitted,originalSubmission);
+    await page.locator('[data-action="template-cancel"]').click();
+    await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
+    assert.equal(state.template,null,'Cancelling template editing preserves old saved template');
+
+    await page.locator('[data-action="open-template"]').click();
+    await page.locator('[data-action="template-reset"]').click();
+    await page.locator('[data-action="reset-template-blank"]').click();
+    assert.equal(await page.locator('.day-card.state-empty').count(),7,
+      'Start blank should clear only the temporary template editor');
+    await page.locator('[data-action="template-reset"]').click();
+    await page.locator('[data-action="reset-template-submitted"]').click();
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','usual-week-template-editor-compact.png')});
+    assert.equal(await page.locator('.day-card.state-empty').count(),0,
+      'Reset from submitted should restore the starting point');
+    await page.locator('.day-card').nth(2).click();
+    await page.locator('[data-action="all-day"]').click();
+    await page.locator('[data-action="template-review-open"]').click();
+    await page.getByRole('heading',{name:'Review your usual week'}).waitFor();
+    assert.equal(await page.locator('.template-review .mini-time-bar').count(),7);
+    assert.equal(await page.locator('[data-action="template-commit"]').isDisabled(),true,
+      'Usual week must be reviewed, not silently saved');
+    await page.locator('.template-review .review-list').evaluate(el=>{
+      el.scrollTop=el.scrollHeight;
+      el.dispatchEvent(new Event('scroll',{bubbles:true}));
+    });
+    await page.locator('[data-action="template-commit"]:not([disabled])').waitFor();
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens',
+      'usual-week-template-review-compact.png')});
+    await page.locator('[data-action="template-commit"]').click();
+    await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
     assert.equal(Object.keys(state.template).length,7);
-    console.log('Reviewed submission and reusable weekly template work.');
+    assert.equal(state.template.Wednesday.status,'available');
+    assert.equal(originalSubmission[dates[2]].status,'unavailable');
+    assert.deepEqual(state.member.submitted,originalSubmission,
+      'Saving a revised usual week cannot change a submitted event response');
+    assert.deepEqual(state.member.draft,originalSubmission);
+    console.log('Editable usual week, reset, cancel, review and save are independent of event submissions.');
 
     // Keep editing UX visible for desktop/mobile screenshot and overflow checks.
     await page.locator('[data-action="back"]').click();
@@ -574,6 +676,32 @@ async function run(){
     assert.match(await page.locator('.range-row').first().innerText(),/18:00/);
     assert.match(await page.locator('.range-row').first().innerText(),/24:00/);
     console.log('All day respects moderator-defined daily limits.');
+
+    // A submitted week remains authoritative even when a revision has been
+    // autosaved. Abandoning the revision restores it on the backend.
+    assert.equal(await page.locator('[data-action="exit-revision"]').count(),1);
+    assert.match(await page.locator('[data-action="exit-revision"]').innerText(),/Discard changes/);
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens','revision-discard-footer-compact.png')});
+    await page.locator('[data-action="exit-revision"]').click();
+    await page.getByRole('dialog',{name:'Discard unsubmitted changes?'}).waitFor();
+    await page.locator('.dialog [data-action="dismiss"]').last().click();
+    assert.equal(await page.locator('.day-card').count(),7,
+      'Cancelling the discard confirmation keeps editing open');
+    await page.locator('[data-action="exit-revision"]').click();
+    await page.locator('.dialog [data-action="confirm-popup"]').click();
+    await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
+    assert.deepEqual(state.member.draft,originalSubmission,
+      'Discarding restores the last real submission, despite autosaved drafts');
+    assert.deepEqual(state.member.submitted,originalSubmission);
+    assert.equal(state.template.Wednesday.status,'available',
+      'Discarding an event revision does not alter the usual-week template');
+    await page.locator('[data-action="back"]').click();
+    assert.match(await page.locator('[data-action="exit-revision"]').innerText(),/Back to submission/);
+    await page.locator('[data-action="exit-revision"]').click();
+    assert.equal(await page.locator('.dialog').count(),0,
+      'No confirmation is necessary when there are no pending edits');
+    await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
+    console.log('Cancel and discard safely return from editing to the previous submission.');
     assert.equal(errors.length,0,JSON.stringify(errors));
     console.log('Responsive Activity stays inside a 460px Discord frame at both widths.');
     assert.ok(saves>=1,'draft edits must reach the server; coalescing should reduce round trips');

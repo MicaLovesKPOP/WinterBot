@@ -577,3 +577,54 @@ button:hover:not(:disabled){filter:brightness(1.09)}
   .progress-top>span{font-size:10px}
   .progress-track{height:6px}
 }
+
+
+/* Availability is not an error: reserve red for destructive actions and
+   errors. Muted slate means unavailable; amber means tentative. */
+:root{--unavailable:#8993a4;--unavailable-track:#606b7b}
+.day-card.state-off .day-mark{background:rgba(137,147,164,.15);color:var(--unavailable)}
+.day-card.state-off .day-status{color:var(--unavailable)}
+.pill.off{background:rgba(137,147,164,.12);border-color:rgba(137,147,164,.32);color:var(--unavailable)}
+.status-dot.off{background:var(--unavailable)}
+.review-answer.off,.status-label.unavailable{color:var(--unavailable)}
+.bar-segment.unavailable{background:var(--unavailable-track)}
+.mini-time-bar{background:var(--unavailable-track)}
+.mini-time-bar.unanswered{
+  border:1px dashed #555b6a;background:#323640;
+}
+.mini-time-bar.fully-unavailable{background:var(--unavailable-track)}
+.review-time-labels{display:flex;flex-direction:column;gap:1px;min-width:0}
+.review-time-labels .status-label{display:block;min-width:0}
+.review-summary{gap:3px}
+.preview-before .review-time-labels,.preview-after .review-time-labels{
+  display:inline-flex;vertical-align:middle;
+}
+.preview-before,.preview-after{display:block}
+.button.danger{background:#783a48;border-color:#b56576;color:#fff}
+.template-day strong{font-size:19px;letter-spacing:-.035em}
+.template-day .day-head>span:first-child{opacity:.55}
+.template-footer .footer-buttons,.action-footer .footer-buttons{
+  display:flex;align-items:center;justify-content:flex-end;gap:6px;
+  flex-wrap:wrap;min-width:0;
+}
+.template-footer .footer-buttons .button{white-space:nowrap}
+.template-reset-options{display:grid;gap:7px;margin:12px 0}
+.template-reset-options .button{justify-content:flex-start}
+.template-review .review-row{min-height:46px}
+@media(max-height:620px){
+  .review-time-labels{gap:0}
+  .review-summary{gap:3px}
+  .review-row{min-height:42px}
+  .template-day strong{font-size:16px}
+  .template-footer .button,.action-footer .footer-buttons .button{
+    padding:4px 7px;font-size:10px;min-height:27px;
+  }
+  .template-footer strong{font-size:10px}
+  .template-review .review-row{min-height:43px}
+}
+@media(max-height:620px) and (max-width:720px){
+  .template-day strong{font-size:12px}
+  .template-day .day-head>span:first-child{display:none}
+  .template-day .day-head{justify-content:flex-end;min-height:12px}
+  .template-footer .footer-buttons{gap:4px}
+}
