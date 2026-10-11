@@ -628,3 +628,109 @@ button:hover:not(:disabled){filter:brightness(1.09)}
   .template-day .day-head{justify-content:flex-end;min-height:12px}
   .template-footer .footer-buttons{gap:4px}
 }
+
+
+/* Final scheduling UX: action mode above days; template actions are at the
+ * bottom of the week panel. Keep narrow Discord's 460px content legible. */
+.mast-actions{display:flex;align-items:center;gap:8px}
+.exit-button{
+  border:1px solid var(--border);border-radius:9px;background:transparent;
+  color:#c9cad5;min-height:30px;padding:5px 11px;
+  font-size:12px;font-weight:760;
+}
+.exit-button:hover{background:#343541;border-color:#727485}
+.week-section{display:flex;flex-direction:column;min-width:0}
+.week-mode-toggle{margin-top:0;margin-bottom:8px}
+.week-grid{margin-top:0}
+.week-template-actions{
+  margin-top:auto;padding-top:11px;display:flex;flex-wrap:wrap;
+  justify-content:flex-start;align-items:center;gap:7px;
+}
+.week-template-actions .template-entry{font-size:11px;min-height:29px}
+.template-scope-label{
+  display:inline-flex;align-items:center;gap:5px;color:#c6b9fc;
+  font-size:11px;font-weight:730;
+}
+.template-scope-label::before{content:"";width:6px;height:6px;
+  border-radius:50%;background:#b39bff}
+.app-shell.template-mode .mast{border-color:#7e74bd}
+.app-shell.template-mode .brand-symbol{background:linear-gradient(140deg,#c1a5ff,#8465cc)}
+.app-shell.template-mode .week-section{border-color:#6b588b}
+.app-shell.template-mode .environment-tag{border-color:#7a65a7;background:#2d263b;color:#d8c5ff}
+.app-shell.template-mode .editor-card{border-color:#665681}
+.certainty-toggle{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  padding:3px;gap:3px;min-height:40px;border:1px solid #4a4c59;
+  background:#171920;border-radius:9px;min-width:0;
+}
+.certainty-choice{
+  border:1px solid transparent;border-radius:6px;padding:4px 6px;
+  background:transparent;font-size:11px;font-weight:740;
+}
+.certainty-choice.confirmed{color:var(--good)}
+.certainty-choice.tentative{color:var(--warn)}
+.certainty-choice.confirmed.active{background:rgba(65,196,162,.16);border-color:rgba(65,196,162,.45)}
+.certainty-choice.tentative.active{background:rgba(242,189,113,.15);border-color:rgba(242,189,113,.45)}
+.range-tag.tentative{color:var(--warn)}
+.day-card.state-mixed .day-mark{
+  background:linear-gradient(110deg,rgba(65,196,162,.2) 50%,rgba(242,189,113,.24) 50%);
+  color:var(--warn);
+}
+.day-card.state-mixed .day-status{color:var(--warn)}
+.pill.mixed{background:rgba(242,189,113,.12);border-color:rgba(242,189,113,.35);color:var(--warn)}
+.status-dot.mixed{background:linear-gradient(90deg,var(--good) 50%,var(--warn) 50%)}
+@media(max-height:620px){
+  .app-shell{gap:4px;padding-top:5px;padding-bottom:5px}
+  .mast{min-height:27px;padding:0 0 2px;border-bottom:none}
+  .brand-symbol{width:25px;height:25px;font-size:17px;border-radius:8px}
+  .brand-name{font-size:14px}
+  .environment-tag{font-size:8px;padding:3px 7px}
+  .mast-actions{gap:5px}
+  .exit-button{font-size:10px;min-height:25px;padding:3px 8px;border-radius:7px}
+  .hero{min-height:32px;gap:8px}
+  .hero h1{font-size:17px}
+  .progress-panel{align-self:center}
+  .week-section .section-title{margin-bottom:5px}
+  .week-mode-toggle{margin-top:0;margin-bottom:7px;padding:2px}
+  .mode-button{min-height:26px}
+  .week-template-actions{padding-top:8px;gap:5px}
+  .week-template-actions .template-entry,
+  .week-template-actions .button.minor{min-height:27px;padding:4px 7px;font-size:10px}
+  .certainty-toggle{min-height:32px;padding:2px;gap:2px;border-radius:7px}
+  .certainty-choice{font-size:10px;padding:3px 2px}
+  .batch-fields{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .action-footer .footer-buttons{flex-wrap:nowrap}
+  .action-footer .footer-buttons .button{white-space:nowrap}
+}
+@media(max-height:620px) and (max-width:720px){
+  .app-shell{padding:5px 9px;gap:4px}
+  .mast{min-height:25px}
+  .hero{min-height:33px}
+  .hero h1{font-size:16px}
+  .week-section{overflow:visible;height:auto}
+  .week-section .section-title{margin-bottom:3px}
+  .week-mode-toggle{margin-bottom:5px}
+  .mode-button{min-height:24px}
+  .week-grid{gap:4px}
+  .week-template-actions{margin-top:5px;padding-top:0;justify-content:flex-end}
+  .week-template-actions .template-entry{min-height:23px;padding:3px 8px}
+  .workspace{gap:4px}
+  .batch-fields{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .certainty-choice{font-size:9px}
+  .action-footer .footer-buttons .button{font-size:10px;padding:4px 7px}
+  .template-scope-label{font-size:9px}
+}
+@media(max-height:620px) and (max-width:390px){
+  .mast-actions .environment-tag{display:none}
+  .hero{grid-template-columns:minmax(0,1fr) 108px}
+  .action-footer .footer-buttons .button{font-size:9px;padding:4px 5px}
+}
+
+@media(max-height:620px) and (max-width:720px){
+  /* The calendar and full-width mode switch already identify the week. Drop
+     the duplicate heading to reclaim ~19px for actual time-window editing. */
+  .week-section .section-title{display:none}
+  .week-mode-toggle{margin-bottom:5px}
+  .day-card{min-height:48px;height:48px}
+  .week-template-actions{margin-top:4px}
+}

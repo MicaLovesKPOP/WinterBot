@@ -47,7 +47,9 @@ async function run(){
     const context=await browser.newContext({viewport:{width:1000,height:860}});
     await context.addInitScript(()=>{
       window.__WINTERBOT_ACTIVITY_SDK_FACTORY__=()=>({
-        ready:async()=>{},commands:{
+        ready:async()=>{},
+        close:(code,message)=>{window.__mockActivityClose={code,message};},
+        commands:{
           authorize:async()=>({code:'mock-auth-code'}),
           authenticate:async()=>({id:'test-member'}),
         },
@@ -200,9 +202,29 @@ async function run(){
     await page.setViewportSize({width:1000,height:860});
     await page.locator('[data-action="toggle-kind"]').first().click();
     await page.getByText('Tentative hours').waitFor();
+    const tentativeColor=await page.locator('.range-tag.tentative').first()
+      .evaluate(el=>getComputedStyle(el).color);
+    const greenColor=await page.locator('.day-card.state-yes').first()
+      .evaluate(el=>getComputedStyle(el.querySelector('.day-status')).color).catch(()=>null);
+    if(greenColor)assert.notEqual(tentativeColor,greenColor,
+      'Tentative window heading must not appear green');
     console.log('Local editing remains immediate during background saves.');
 
     await page.locator('[data-action="multi"]').click();
+    await page.getByRole('heading',{name:'Choose days in the calendar'}).waitFor();
+    assert.equal(await page.locator('[data-batch="kind"]').count(),0,
+      'Certainty should not use an unstyled native dropdown');
+    assert.equal(await page.locator('.certainty-choice').count(),2);
+    await page.locator('[data-action="batch-kind"][data-kind="tentative"]').click();
+    assert.equal(await page.locator('.certainty-choice.tentative').getAttribute('aria-pressed'),'true');
+    const amber=await page.locator('.certainty-choice.tentative').evaluate(el=>getComputedStyle(el).color);
+    const confirmed=await page.locator('.certainty-choice.confirmed').evaluate(el=>getComputedStyle(el).color);
+    assert.notEqual(amber,confirmed,'Tentative and confirmed must have different colors');
+    await page.setViewportSize({width:462,height:460});
+    await page.screenshot({path:path.join(process.cwd(),'preview-screens',
+      'batch-certainty-toggle-compact.png')});
+    await page.setViewportSize({width:1000,height:860});
+    await page.locator('[data-action="batch-kind"][data-kind="confirmed"]').click();
     await page.locator('.day-card').nth(0).click();
     await page.locator('.day-card').nth(3).click();
     await page.locator('[data-action="batch-mode"][data-mode="hours"]').click();
@@ -329,9 +351,35 @@ async function run(){
     await page.locator('[data-action="submit"]').click();
     await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
     assert.ok(state.member.submitted);
+    // Editing an already submitted week has deliberate Cancel and Submit
+    // actions. Submit takes the user through review, then exits editing.
+    await page.locator('[data-action="back"]').click();
+    assert.equal(await page.locator('[data-action="review"]').isDisabled(),true,
+      'Submit changes must be inactive if nothing has changed');
+    await page.locator('.day-card').nth(3).click();
+    await page.locator('[data-action="all-day"]').click();
+    await page.locator('[data-action="review"]').click();
+    await page.getByRole('heading',{name:'Review your availability'}).waitFor();
+    await page.locator('.review-list').evaluate(el=>{
+      el.scrollTop=el.scrollHeight;
+      el.dispatchEvent(new Event('scroll',{bubbles:true}));
+    });
+    await page.locator('[data-action="submit"]:not([disabled])').waitFor();
+    await page.locator('[data-action="submit"]').click();
+    await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
+    assert.equal(state.member.submitted[dates[3]].windows[0].end,'24:00');
+    console.log('Submit changes reviews and exits revision editing.');
     const originalSubmission=structuredClone(state.member.submitted);
     await page.locator('[data-action="open-template"]').click();
-    await page.getByRole('heading',{name:'Your usual week',exact:true}).waitFor();
+    await page.locator('.app-shell.template-mode').waitFor();
+    assert.equal(await page.locator('.app-shell.template-mode').count(),1,
+      'Template editing should have an unmistakable visual identity');
+    await page.locator('[data-action="exit-activity"]').click();
+    await page.getByRole('dialog',{name:'Exit WinterBot?'}).waitFor();
+    await page.getByText(/template has not been saved/i).waitFor();
+    await page.locator('.dialog [data-action="dismiss"]').last().click();
+    assert.equal(await page.evaluate(()=>Boolean(window.__mockActivityClose)),false,
+      'Dismissing Exit must keep the Activity open');
     await page.setViewportSize({width:320,height:460});
     const narrowTemplate=await page.evaluate(()=>{
       const footer=document.querySelector('.template-footer');
@@ -588,7 +636,8 @@ async function run(){
           pageHeight:document.documentElement.scrollHeight,
           documentWidth:document.documentElement.scrollWidth,
           shell:rect('.app-shell'),mast:rect('.mast'),hero:rect('.hero'),
-          week:rect('.week-section'),
+          week:rect('.week-section'),mode:rect('.week-mode-toggle'),
+          templateActions:rect('.week-template-actions'),
           workspace:rect('.workspace'),editor:rect('.editor-card'),
           footer:rect('.action-footer'),cards,
           editorScroll:document.querySelector('.editor-card').scrollHeight,
@@ -614,6 +663,14 @@ async function run(){
       assert.equal(metrics.footerAccessible,true,
         'Primary footer button must be clickable, not covered by the editor in '+name);
       assert.ok(metrics.workspace.height>160,'Editor workspace too short in '+name);
+      assert.ok(metrics.mode?.bottom<=metrics.cards[0].top+2,
+        'Single/multiple day toggle should appear before the dates in '+name);
+      assert.ok(metrics.templateActions?.top>=Math.min(...metrics.cards.map(c=>c.bottom))-1,
+        'Usual-week management should follow the calendar in '+name);
+      if(width>720)assert.ok(metrics.week.bottom-metrics.templateActions.bottom<=16,
+        'Template controls should be bottom-aligned on wide screens');
+      if(name==='narrow')assert.ok(metrics.editor.height>=190,
+        'Compact header should leave at least 190px for actual editing');
       assert.ok(metrics.cards.every(c=>c.left>=0&&c.right<=width+1),
         'Calendar day cards spill outside viewport in '+name);
       if(name==='narrow')assert.ok(metrics.cards.every(c=>Math.abs(c.top-metrics.cards[0].top)<2),
@@ -680,7 +737,7 @@ async function run(){
     // A submitted week remains authoritative even when a revision has been
     // autosaved. Abandoning the revision restores it on the backend.
     assert.equal(await page.locator('[data-action="exit-revision"]').count(),1);
-    assert.match(await page.locator('[data-action="exit-revision"]').innerText(),/Discard changes/);
+    assert.match(await page.locator('[data-action="exit-revision"]').innerText(),/Cancel editing|Cancel/);
     await page.screenshot({path:path.join(process.cwd(),'preview-screens','revision-discard-footer-compact.png')});
     await page.locator('[data-action="exit-revision"]').click();
     await page.getByRole('dialog',{name:'Discard unsubmitted changes?'}).waitFor();
@@ -696,12 +753,17 @@ async function run(){
     assert.equal(state.template.Wednesday.status,'available',
       'Discarding an event revision does not alter the usual-week template');
     await page.locator('[data-action="back"]').click();
-    assert.match(await page.locator('[data-action="exit-revision"]').innerText(),/Back to submission/);
+    assert.match(await page.locator('[data-action="exit-revision"]').innerText(),/Cancel editing|Cancel/);
     await page.locator('[data-action="exit-revision"]').click();
     assert.equal(await page.locator('.dialog').count(),0,
       'No confirmation is necessary when there are no pending edits');
     await page.getByRole('heading',{name:'Your week is submitted'}).waitFor();
-    console.log('Cancel and discard safely return from editing to the previous submission.');
+    await page.locator('[data-action="exit-activity"]').click();
+    await page.getByRole('dialog',{name:'Exit WinterBot?'}).waitFor();
+    await page.locator('.dialog [data-action="confirm-popup"]').click();
+    await page.waitForFunction(()=>window.__mockActivityClose?.code===1000);
+    assert.match(await page.evaluate(()=>window.__mockActivityClose.message),/exited WinterBot/i);
+    console.log('Cancel and discard safely return from editing; SDK Exit requests a normal close.');
     assert.equal(errors.length,0,JSON.stringify(errors));
     console.log('Responsive Activity stays inside a 460px Discord frame at both widths.');
     assert.ok(saves>=1,'draft edits must reach the server; coalescing should reduce round trips');

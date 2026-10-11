@@ -126,20 +126,24 @@ Run these as the test-server owner or a member with Manage Server permission:
    - The exact same picker is used when configuring multiple days at once.
    Try extra windows and optional duration limits. Editing responds locally;
    the saved-draft indicator reflects remote persistence.
-4. Use the full-width **Single day / Multiple days** mode control below the
-   weekly calendar. Select multiple days, choose their common availability
-   (or All permitted hours / Unavailable), and apply. Existing answers get
-   a green/amber/slate-gray overwrite preview before replacement.
+4. Use the full-width **Single day / Multiple days** mode control **above**
+   the weekly calendar. Select multiple days in the calendar (the editor might
+   be beside them, not above/below), then choose common availability and
+   apply. The certainty control has two clearly colored options: green
+   Available and amber Tentative, instead of an OS-themed dropdown.
+   Existing answers get a green/amber/slate-gray overwrite preview.
 5. Use **Copy this day** to copy all its windows to chosen dates.
 6. Choose **Review week**. Every date shows a compact timeline: green confirmed,
    amber/yellow tentative, and muted slate-gray unavailable. Unselected gaps
    inside a reviewed day are unavailable too, so the bar never leaves them
    ambiguously blank. Tentative ranges read `19:00–22:00 (tentative)`; multiple
    ranges stack without extra separator rows. Review every date, then submit.
-7. To try revising an existing submission, edit a day after submitting. The
-   **Discard changes** button prompts before restoring the last submitted
-   snapshot; saved draft changes are removed, but submitted answers remain.
-   **Back to submission** exits immediately when there is nothing to discard.
+7. To try revising an existing submission, choose Edit availability and
+   change a date. The fixed footer now presents **Cancel** and **Submit changes**.
+   Cancel asks permission to discard autosaved draft edits and restores the
+   last real submission; with no changes it exits immediately. Submit changes
+   opens mandatory review before confirming, and then returns to the submitted
+   receipt. The template shortcut is kept at the bottom of the calendar panel.
 8. Click **Create usual week** (or **Edit usual week**) to open a separate,
    reusable Monday–Sunday editor. It starts with an existing saved template,
    otherwise your submitted week, otherwise your current draft or a blank week.
@@ -150,7 +154,12 @@ Run these as the test-server owner or a member with Manage Server permission:
 9. Run **/activitytest next-week** to test reusing your saved usual week and
    editing exceptions. Unanswered weekdays in a partial template stay unanswered.
 10. Close/reopen the Activity to verify persistence.
-11. **/activitytest reset** removes ONLY the isolated Activity test round AND
+11. Use **Exit** at the upper right to close the Activity through the official
+    Discord SDK. Exit confirms what will happen to an unsubmitted event draft
+    (it stays saved) or a locally edited usual-week template (it is discarded).
+    Cancel keeps the Activity open. The 12-hour Android/Material dial remains a
+    single 1–12 ring with AM/PM; 24-hour mode retains two rings.
+12. **/activitytest reset** removes ONLY the isolated Activity test round AND
     usual-week templates. It does not modify real events or roles.
 
 The older test-server **/activitytest vote** backend exists for legacy algorithm

@@ -1,4 +1,4 @@
-import { DiscordSDK } from '@discord/embedded-app-sdk';
+import { DiscordSDK, RPCCloseCodes } from '@discord/embedded-app-sdk';
 
 // Focused, isolated Activity UX pilot. Unlike message components, calendar
 // interaction is entirely client-side; server writes happen in the background.
@@ -19,6 +19,7 @@ let reviewReady=false;
 let reviewSeenBottom=false;
 let errorSaving=false;
 let preferenceClock='24';
+let discordSdk=null;
 let templateDraft={};
 let templateReturnView='week';
 let templateOrigin='blank';
@@ -115,6 +116,7 @@ function dayKind(day){
   if(!day)return 'empty';
   if(day.status==='unavailable')return 'off';
   if(day.windows.every(w=>w.kind==='tentative'))return 'unsure';
+  if(day.windows.some(w=>w.kind==='tentative'))return 'mixed';
   return 'yes';
 }
 function makeButton(text,action,cls='',extra=''){
@@ -176,11 +178,13 @@ function stageHeader(){
     '<div class="brand-symbol" aria-hidden="true"><span>W</span></div>'+
     '<div><p class="eyebrow">WINTERBOT / COMMUNITY SCHEDULING</p>'+
     '<div class="brand-name">'+(inTemplate()?'Your usual week':'Your availability')+'</div></div></div>'+
-    '<span class="environment-tag">TEST ACTIVITY</span></header>'+
+    '<div class="mast-actions"><span class="environment-tag">TEST ACTIVITY</span>'+
+    makeButton('Exit','exit-activity','exit-button','aria-label="Exit WinterBot Activity"')+
+    '</div></header>'+
     '<section class="hero"><div class="hero-copy"><p class="eyebrow">GAME NIGHT · '+esc(model.round.timezone)+'</p>'+
-    '<h1>'+(inTemplate()?'Monday – Sunday':
+    '<h1>'+(inTemplate()?'Repeats every week':
       esc(datestring(dates[0],'mini'))+' – '+esc(datestring(dates.at(-1),'mini')))+'</h1>'+
-    '<p>'+(inTemplate()?'Create a reusable schedule independently of this event.':
+    '<p>'+(inTemplate()?'Independent of your submitted availability.':
       'Pick your days, adjust your hours and review before submitting.')+'</p></div>'+
     '<div class="progress-panel"><div class="progress-top"><strong>'+answered+' <span>/ '+dates.length+'</span></strong>'+
     '<span>'+(inTemplate()?'weekdays set':'days answered')+'</span></div><div class="progress-track"><div class="progress-fill" style="width:'+pct+'%"></div></div>'+
@@ -196,8 +200,8 @@ function dayCards(){
     const iso=new Date(date+'T12:00:00Z');
     const day=iso.toLocaleDateString('en-GB',{weekday:'short',timeZone:'UTC'});
     const n=inTemplate()?day:iso.toLocaleDateString('en-GB',{day:'numeric',timeZone:'UTC'});
-    const mark=kind==='yes'?icon.check:kind==='unsure'?icon.unsure:kind==='off'?icon.off:icon.empty;
-    const status=kind==='yes'?'Available':kind==='unsure'?'Tentative':
+    const mark=kind==='yes'?icon.check:kind==='mixed'?'◒':kind==='unsure'?icon.unsure:kind==='off'?icon.off:icon.empty;
+    const status=kind==='yes'?'Available':kind==='mixed'?'Mixed':kind==='unsure'?'Tentative':
       kind==='off'?'Unavailable':'Not set';
     return '<button type="button" class="day-card state-'+kind+
       (inTemplate()?' template-day':'')+
@@ -211,22 +215,21 @@ function dayCards(){
 }
 function weekCard(){
   return '<section class="week-section" aria-label="Weekly dates">'+
-    '<div class="section-title"><div><p class="eyebrow">STEP 1</p><h2>'+
-    (inTemplate()?'Your usual week':'Your week')+'</h2></div>'+
-    '<div class="week-actions">'+
-    (!inTemplate()?(model.template?
-      makeButton('Reuse','reuse','minor','title="Reuse usual week"')+
-      makeButton('Edit template','open-template','minor'):
-      makeButton('Create usual week','open-template','minor')):'')+
-    '</div></div>'+
-    '<div class="week-grid">'+dayCards()+'</div>'+
+    '<div class="section-title"><div><h2>'+
+    (inTemplate()?'Weekly template':'Your week')+'</h2></div></div>'+
     '<div class="week-mode-toggle" role="group" aria-label="Availability editing mode">'+
     '<button type="button" data-action="mode-single" aria-pressed="'+!multi+'"'+
     ' class="mode-button'+(!multi?' active':'')+'">Single day</button>'+
     '<button type="button" data-action="multi" aria-pressed="'+multi+'"'+
     ' class="mode-button'+(multi?' active':'')+'">Multiple days'+
     (multi&&chosen.size?' ('+chosen.size+')':'')+'</button></div>'+
-    '</section>';
+    '<div class="week-grid">'+dayCards()+'</div>'+
+    '<div class="week-template-actions">'+
+    (inTemplate()?'<span class="template-scope-label">Template only · Event unaffected</span>':
+      makeButton(model.template?'Edit usual week':'Create usual week',
+        'open-template','outline template-entry')+
+      (model.template?makeButton('Reuse','reuse','minor','title="Reuse saved weekly template"'):''))+
+    '</div></section>';
 }
 function intervalIntersection(a,b){
   const result=[];
@@ -325,7 +328,7 @@ function durationOptions(current){
 }
 function windowEditor(date,day,index,w){
   return '<article class="range-row"><div class="range-top">'+
-    '<div class="range-tag">'+(w.kind==='tentative'?'Tentative hours':'Available hours')+'</div>'+
+    '<div class="range-tag '+w.kind+'">'+(w.kind==='tentative'?'Tentative hours':'Available hours')+'</div>'+
     '<div class="range-actions">'+
     makeButton(w.kind==='tentative'?'Mark available':'Mark tentative','toggle-kind','minor',
       'data-index="'+index+'" aria-label="Change certainty for window '+(index+1)+'"')+
@@ -347,7 +350,8 @@ function singleEditor(){
   const date=selectedDay||model.round.dates[0],entry=dayEntry(date);
   const kind=entry?.status==='available'?'hours':entry?.status==='unavailable'?'off':'none';
   const isTentative=entry?.status==='available'&&entry.windows.every(w=>w.kind==='tentative');
-  const badge=kind==='hours'?(isTentative?'Tentative':'Available'):
+  const hasTentative=entry?.status==='available'&&entry.windows.some(w=>w.kind==='tentative');
+  const badge=kind==='hours'?(isTentative?'Tentative':hasTentative?'Mixed availability':'Available'):
     kind==='off'?'Unavailable':'Not answered';
   const title='<div class="editor-heading"><div><p class="eyebrow">STEP 2 · EDIT DAY</p><h2>'+
     esc(inTemplate()?weekday(date):datestring(date))+'</h2></div><span class="pill '+dayKind(entry)+'">'+
@@ -377,8 +381,8 @@ function batchEditor(){
   const replaced=dates.filter(d=>dayEntry(d)).length;
   const ready=dates.length>0;
   const body='<div class="editor-heading"><div><p class="eyebrow">STEP 2 · BULK EDIT</p><h2>'+
-    (ready?'Edit '+dates.length+' selected day(s)':'Select days above')+'</h2></div></div>'+
-    '<p class="hint">Set the same availability on multiple dates in one action. Your other days stay unchanged.</p>'+
+    (ready?'Edit '+dates.length+' selected day(s)':'Choose days in the calendar')+'</h2></div></div>'+
+    '<p class="hint">Select days from the calendar, then apply their shared availability. Other days stay unchanged.</p>'+
     (replaced?'<div class="notice-inline">'+replaced+' selected day(s) already have answers. You will review replacements before applying.</div>':'')+
     '<div class="choice-row">'+
     makeButton('Available hours','batch-mode','choice '+(batch.mode==='hours'?'selected':'soft'),'data-mode="hours"')+
@@ -389,11 +393,14 @@ function batchEditor(){
       timeInput(null,-1,'start',batch.start)+'</div>'+
       '<div class="field"><label>Until</label>'+
       timeInput(null,-1,'end',batch.end)+
-      '</div><div class="field"><label>Certainty</label><select data-batch="kind"'+
-      ' class="certainty-select '+batch.kind+'">'+
-      '<option value="confirmed"'+(batch.kind==='confirmed'?' selected':'')+'>Available</option>'+
-      '<option value="tentative"'+(batch.kind==='tentative'?' selected':'')+'>Tentative</option>'+
-      '</select></div></div>':'')+
+      '</div><div class="field"><label>Certainty</label>'+
+      '<div class="certainty-toggle" role="group" aria-label="Availability certainty">'+
+      '<button type="button" class="certainty-choice confirmed'+
+        (batch.kind==='confirmed'?' active':'')+'" data-action="batch-kind" data-kind="confirmed"'+
+        ' aria-pressed="'+(batch.kind==='confirmed')+'">Available</button>'+
+      '<button type="button" class="certainty-choice tentative'+
+        (batch.kind==='tentative'?' active':'')+'" data-action="batch-kind" data-kind="tentative"'+
+        ' aria-pressed="'+(batch.kind==='tentative')+'">Tentative</button></div></div></div>':'')+
     '<div class="editor-footer">'+makeButton('Apply to '+dates.length+' day(s)','apply-batch','primary',
       ready&&(batch.mode!=='hours'||(batch.start&&batch.end))?'':'disabled')+'</div>';
   return '<section class="editor-card">'+body+'</section>';
@@ -417,8 +424,7 @@ function reviewPage(){
     (!full?'<p class="warning-text">'+(dates.length-answered)+' unanswered day(s). Finish them before submitting.</p>':'')+
     '<p class="review-scroll-hint" data-role="review-scroll" hidden>Scroll through all dates to enable submission.</p>'+
     '<div class="bottom-actions">'+makeButton('Back to editing','back','outline')+
-    (model.member.submitted?makeButton(hasRevision()?'Discard changes':'Back to submission',
-      'exit-revision','outline'):'')+
+    (model.member.submitted?makeButton('Cancel editing','exit-revision','outline'):'')+
     makeButton('Confirm & submit','submit','primary',full&&!errorSaving&&!dirty.size&&reviewReady&&!saving&&reviewSeenBottom?'':'disabled')+
     '</div></section>';
 }
@@ -461,7 +467,7 @@ function donePage(){
     '<div class="review-list">'+model.round.dates.map(d=>
       '<div class="review-row"><strong>'+esc(datestring(d,'mini'))+'</strong>'+
       '<span>'+esc(summary(model.member.submitted?.[d]))+'</span></div>').join('')+'</div>'+
-    '<div class="bottom-actions">'+makeButton('Edit my availability','back','outline')+
+    '<div class="bottom-actions">'+makeButton('Edit availability','back','outline')+
     makeButton(model.template?'Edit usual week':'Create usual week','open-template','primary')+
     '</div></section>';
 }
@@ -840,6 +846,16 @@ function popupHtml(){
         '<div><strong>'+esc(datestring(d,'mini'))+'</strong><span>'+
         esc(summary(model.template?.[weekday(d)]))+'</span></div>').join('')+'</div>';
     confirm='Apply usual week';
+  }else if(popup.type==='exit'){
+    title='Exit WinterBot?';
+    body='<p class="hint">'+(inTemplate()?
+      'This usual-week template has not been saved. Exiting will discard those template edits.':
+      model.member.submitted&&hasRevision()?
+      'Your unsubmitted edits will remain a saved draft. Your previous submission stays active.':
+      !model.member.submitted?
+      'Any draft availability will stay saved, but it is not submitted.':
+      'Your submitted availability will remain recorded.')+'</p>';
+    confirm='Exit Activity';
   }else if(popup.type==='discard'){
     title='Discard unsubmitted changes?';
     body='<p class="hint">Your previously submitted week will remain exactly as it was. '+
@@ -877,7 +893,7 @@ function render(){
   const content=view==='review'?reviewPage():view==='template-review'?templateReviewPage():
     view==='done'?donePage():
     '<div class="workspace">'+weekCard()+(multi?batchEditor():singleEditor())+'</div>';
-  root.innerHTML='<main class="app-shell">'+stageHeader()+
+  root.innerHTML='<main class="app-shell'+(inTemplate()?' template-mode':'')+'">'+stageHeader()+
     (notice?'<div class="message '+(noticeError?'danger':'')+'" role="status">'+esc(notice)+'</div>':'')+
     content+
     (view==='week'?'<footer class="action-footer"><div><strong>'+
@@ -885,9 +901,9 @@ function render(){
         hasRevision()?'Changes not yet submitted':'Submitted · You can edit your response')+
       '</strong><small>Drafts save automatically; only reviewed submissions count.</small></div>'+
       '<div class="footer-buttons">'+
-      (model.member.submitted?makeButton(hasRevision()?'Discard changes':'Back to submission',
-        'exit-revision','outline'):'')+
-      makeButton('Review week →','review','primary')+'</div></footer>':
+      (model.member.submitted?makeButton('Cancel','exit-revision','outline'):'')+
+      makeButton(model.member.submitted?'Submit changes →':'Review & submit →',
+        'review','primary',model.member.submitted&&!hasRevision()?'disabled':'')+'</div></footer>':
       view==='template'?templateFooter():'')+
     '<div class="privacy-note">TEST ONLY · Your answers stay in the isolated WinterBot testing system.</div>'+
     popupHtml()+'</main>';
@@ -1076,6 +1092,17 @@ async function commitTemplate(){
   }
 }
 
+async function exitDiscordActivity(){
+  if(!discordSdk||typeof discordSdk.close!=='function'){
+    throw Error('Discord could not close the Activity. Use the red Leave Activity control.');
+  }
+  // Event drafts remain drafts. Never submit on exit. The independent
+  // template editor intentionally has no autosave and loses its local edits.
+  if(saveTimer||saving||dirty.size)await flushAll();
+  popup=null;
+  discordSdk.close(RPCCloseCodes.CLOSE_NORMAL,'User exited WinterBot Activity');
+}
+
 async function discardRevision(){
   if(!model.member.submitted)throw Error('No previous submission exists.');
   // Wait for any in-flight background write before the authoritative reset,
@@ -1129,6 +1156,9 @@ async function confirmPopup(){
     }
     if(active.type==='discard'){
       await discardRevision();return;
+    }
+    if(active.type==='exit'){
+      await exitDiscordActivity();return;
     }
   }catch(error){actionError(error);}
 }
@@ -1191,6 +1221,9 @@ function onClick(event){
       if(action==='clock-save'){saveClockRange();return;}
     }
     if(action==='confirm-popup'){confirmPopup();return;}
+    if(action==='exit-activity'){
+      popup={type:'exit'};render();return;
+    }
     if(action==='open-template'){openTemplateEditor().catch(actionError);return;}
     if(action==='template-cancel'){cancelTemplate();return;}
     if(action==='template-reset'){popup={type:'template-reset'};render();return;}
@@ -1237,6 +1270,10 @@ function onClick(event){
       changeDay(selectedDay,day.windows.length?day:null);return;
     }
 
+    if(action==='batch-kind'){
+      batch.kind=element.dataset.kind;
+      render();return;
+    }
     if(action==='batch-mode'){batch.mode=element.dataset.mode;render();return;}
     if(action==='apply-batch'){openBatchConfirmation();return;}
     if(action==='copy'){
@@ -1331,6 +1368,7 @@ async function initialize(){
     const sdk=window.__WINTERBOT_ACTIVITY_SDK_FACTORY__?
       window.__WINTERBOT_ACTIVITY_SDK_FACTORY__(config.clientId):new DiscordSDK(config.clientId);
     await sdk.ready();
+    discordSdk=sdk;
     let code;
     try{
       code=await sdk.commands.authorize({client_id:config.clientId,response_type:'code',
