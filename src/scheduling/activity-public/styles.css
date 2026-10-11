@@ -405,7 +405,7 @@ button:hover:not(:disabled){filter:brightness(1.09)}
   position:relative;flex-shrink:0;width:220px;height:220px;margin:0 auto;
   background:radial-gradient(circle at center,#343645 0%,#343645 5px,#292b37 6px,#292b37 100%);
   border:1px solid #4a4c5d;border-radius:50%;
-  touch-action:manipulation;
+  touch-action:none;user-select:none;-webkit-user-select:none;
 }
 .clock-hand-svg{width:220px;height:220px;position:absolute;inset:0;pointer-events:none}
 .clock-inner-ring{fill:none;stroke:#555667;stroke-width:1;stroke-dasharray:2 4}
@@ -416,7 +416,7 @@ button:hover:not(:disabled){filter:brightness(1.09)}
   transform:translate(-50%,-50%);
   display:grid;place-items:center;padding:0;border:none;
   background:transparent;color:#e2e3ed;font-size:12px;font-weight:770;
-  touch-action:manipulation;z-index:1;line-height:1;
+  touch-action:none;user-select:none;-webkit-user-select:none;z-index:1;line-height:1;
 }
 .clock-number.inner{font-size:11px;color:#e0e1ed;width:26px;height:26px}
 .clock-number.selected{background:var(--brand);color:#191a2a;box-shadow:0 2px 13px #0004}

@@ -164,10 +164,14 @@ async function run(){
     await page.screenshot({path:path.join(process.cwd(),'preview-screens','clock-picker-320x460-hour.png')});
     await page.setViewportSize({width:462,height:460});
     await page.locator('.clock-number[data-value="19"]').click();
+    assert.equal(await page.locator('[data-action="clock-target"][data-which="start"]').getAttribute('aria-pressed'),'true');
     assert.equal(await page.locator('.clock-number').count(),12,
       'Hour selection advances to 5-minute clock face');
     await page.screenshot({path:path.join(process.cwd(),'preview-screens','clock-picker-462x460-minute.png')});
     await page.locator('.clock-number[data-value="30"]').click();
+    assert.equal(await page.locator('[data-action="clock-target"][data-which="end"]').getAttribute('aria-pressed'),'true',
+      'FROM minutes should automatically advance to UNTIL hours');
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Hours/);
     await page.locator('[data-action="clock-save"]').click();
     await page.locator('[data-action="edit-range"][data-which="start"]').first()
       .getByText('19:30').waitFor();
@@ -183,9 +187,13 @@ async function run(){
     await page.locator('[data-action="edit-range"][data-which="start"]').click();
     await page.locator('.clock-number[data-value="20"]').click();
     await page.locator('.clock-number[data-value="0"]').click();
-    await page.locator('[data-action="clock-target"][data-which="end"]').click();
+    assert.equal(await page.locator('[data-action="clock-target"][data-which="end"]').getAttribute('aria-pressed'),'true',
+      'Batch clock also advances FROM minutes to UNTIL hour automatically');
     await page.locator('.clock-number[data-value="22"]').click();
     await page.locator('.clock-number[data-value="30"]').click();
+    await page.getByText('Range chosen · Apply when ready').waitFor();
+    assert.equal(await page.locator('[data-action="clock-save"]').count(),1,
+      'UNTIL minute completion requires explicit Apply, never autosubmits');
     await page.locator('[data-action="clock-save"]').click();
     assert.match(await page.locator('[data-action="edit-range"][data-which="start"]').innerText(),/20:00/);
     assert.match(await page.locator('[data-action="edit-range"][data-which="end"]').innerText(),/22:30/);
@@ -250,6 +258,11 @@ async function run(){
     await page.locator('[data-action="clock-ampm"][data-ampm="AM"]').click();
     await page.locator('.clock-number[data-value="7"]').click();
     await page.locator('.clock-number[data-value="30"]').click();
+    assert.equal(await page.locator('[data-action="clock-target"][data-which="end"]').getAttribute('aria-pressed'),'true',
+      'Completing FROM minutes must automatically open UNTIL hours');
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Hours/);
+    // The user can still return to FROM and refine AM/PM before applying.
+    await page.locator('[data-action="clock-target"][data-which="start"]').click();
     await page.locator('[data-action="clock-ampm"][data-ampm="PM"]').click();
     assert.match(await page.locator('[data-action="clock-target"][data-which="start"]').innerText(),/7:30 PM/);
     await page.locator('[data-action="clock-save"]').click();
@@ -267,6 +280,116 @@ async function run(){
     await page.locator('.clock-number[data-value="0"]').click();
     await page.locator('[data-action="clock-save"]').click();
     await page.locator('[data-action="edit-range"][data-which="end"]').first().getByText('23:00').waitFor();
+
+    // Real pointer drag: move back and forth while held. The hand and header
+    // must track each movement, but the stage only advances upon release.
+    await page.setViewportSize({width:462,height:460});
+    const polar=(box,sector,radius)=>({
+      x:box.x+box.width/2+radius*box.width/220*Math.sin(sector*Math.PI/6),
+      y:box.y+box.height/2-radius*box.height/220*Math.cos(sector*Math.PI/6),
+    });
+    const moveTo=async(position,steps=8)=>page.mouse.move(position.x,position.y,{steps});
+    await page.locator('[data-action="edit-range"][data-which="start"]').first().click();
+    let face=await page.locator('.clock-face').boundingBox();
+    await moveTo(polar(face,7,56),1); // 19 (inner ring)
+    await page.mouse.down();
+    await moveTo(polar(face,8,56));
+    assert.match(await page.locator('[data-action="clock-target"][data-which="start"]').innerText(),/20:30/,
+      'Dragging must update the FROM time before release');
+    await moveTo(polar(face,9,56));
+    assert.match(await page.locator('[data-action="clock-target"][data-which="start"]').innerText(),/21:30/,
+      'Dragging the hand around the clock must keep tracking new choices');
+    await moveTo(polar(face,8,88)); // outer ring (08), while still held
+    assert.match(await page.locator('[data-action="clock-target"][data-which="start"]').innerText(),/08:30/,
+      '24-hour dragging must allow freely moving between inner and outer hour rings');
+    await moveTo(polar(face,8,56)); // inner ring again (20)
+    assert.match(await page.locator('[data-action="clock-target"][data-which="start"]').innerText(),/20:30/);
+    const liveHandX=Number(await page.locator('.clock-hand').getAttribute('x2'));
+    assert.ok(liveHandX<100,'The clock hand must rotate along with the selected hour');
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Hours/,
+      'The dial must not jump to minutes while the pointer is held');
+    await page.mouse.up();
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Minutes/,
+      'Releasing the hour advances to FROM minutes');
+    face=await page.locator('.clock-face').boundingBox();
+    await moveTo(polar(face,6,88),1); // 30 minutes
+    await page.mouse.down();
+    await moveTo(polar(face,7,88)); // 35 minutes
+    assert.match(await page.locator('[data-action="clock-target"][data-which="start"]').innerText(),/20:35/,
+      'Dragging minutes must update the preview continuously');
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Minutes/,
+      'The minute dial must not jump while still dragging');
+    await page.mouse.up();
+    assert.equal(await page.locator('[data-action="clock-target"][data-which="end"]').getAttribute('aria-pressed'),'true',
+      'Releasing FROM minutes must automatically advance to UNTIL hours');
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Hours/);
+    face=await page.locator('.clock-face').boundingBox();
+    await moveTo(polar(face,11,56),1); // 23
+    await page.mouse.down();
+    await moveTo(polar(face,10,56)); // 22
+    await page.mouse.up();
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Minutes/);
+    face=await page.locator('.clock-face').boundingBox();
+    await moveTo(polar(face,0,88),1);
+    await page.mouse.down();
+    await moveTo(polar(face,3,88)); // 15
+    await moveTo(polar(face,4,88)); // 20
+    await moveTo(polar(face,3,88)); // back to 15
+    await page.mouse.up();
+    await page.getByText('Range chosen · Apply when ready').waitFor();
+    assert.match(await page.locator('[data-action="clock-target"][data-which="end"]').innerText(),/22:15/);
+    assert.equal(await page.locator('.clock-dialog').count(),1,
+      'Dragging the final minute must not auto-submit the range');
+    await page.locator('[data-action="clock-save"]').click();
+    await page.locator('[data-action="edit-range"][data-which="start"]').first().getByText('20:35').waitFor();
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().getByText('22:15').waitFor();
+    console.log('Mouse dragging previews continuously, then advances only after release.');
+
+    // Touchscreen drag on the same custom face. The touch gestures must not
+    // scroll the clock (touch-action:none) or require tapping each numeral.
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().click();
+    const touch=await context.newCDPSession(page);
+    await touch.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+    const touchEvent=async(type,position)=>touch.send('Input.dispatchTouchEvent',{
+      type,touchPoints:position?[{x:position.x,y:position.y,id:7,force:1}]:[],
+    });
+    face=await page.locator('.clock-face').boundingBox();
+    await touchEvent('touchStart',polar(face,10,56)); // inner 22
+    await touchEvent('touchMove',polar(face,11,56));  // inner 23
+    assert.match(await page.locator('[data-action="clock-target"][data-which="end"]').innerText(),/23:15/,
+      'A real touch drag must preview the new UNTIL time');
+    await touchEvent('touchEnd');
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Minutes/);
+    face=await page.locator('.clock-face').boundingBox();
+    await touchEvent('touchStart',polar(face,3,88)); // minute 15
+    await touchEvent('touchMove',polar(face,6,88));  // minute 30
+    await touchEvent('touchEnd');
+    await page.getByText('Range chosen · Apply when ready').waitFor();
+    await page.locator('[data-action="clock-save"]').click();
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().getByText('23:30').waitFor();
+    console.log('Touch dragging works with the same staged hour/minute progression.');
+
+    // A cancelled touch gesture reverts its live preview. The dial remains
+    // keyboard-accessible as well (Enter/Space on numbered buttons).
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().click();
+    face=await page.locator('.clock-face').boundingBox();
+    await touchEvent('touchStart',polar(face,11,56));
+    await touchEvent('touchMove',polar(face,10,56));
+    assert.match(await page.locator('[data-action="clock-target"][data-which="end"]').innerText(),/22:30/);
+    await touchEvent('touchCancel');
+    assert.match(await page.locator('[data-action="clock-target"][data-which="end"]').innerText(),/23:30/,
+      'Cancelled touch drag must roll back the provisional edit');
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Hours/);
+    await page.locator('.clock-number[data-value="22"]').focus();
+    await page.keyboard.press('Enter');
+    assert.match(await page.locator('.clock-stages .button.active').innerText(),/Minutes/);
+    await page.locator('.clock-number[data-value="45"]').focus();
+    await page.keyboard.press('Enter');
+    await page.getByText('Range chosen · Apply when ready').waitFor();
+    await page.locator('[data-action="clock-save"]').click();
+    await page.locator('[data-action="edit-range"][data-which="end"]').first().getByText('22:45').waitFor();
+    console.log('Pointer cancellation and keyboard time choices remain usable.');
+
     fs.mkdirSync(path.join(process.cwd(),'preview-screens'),{recursive:true});
     for(const width of [1024,720,375,320]){
       await page.setViewportSize({width,height:800});
