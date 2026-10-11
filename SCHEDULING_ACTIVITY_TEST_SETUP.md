@@ -71,22 +71,44 @@ is already bundled; no new startup command or separate server is needed.
 
 ## Testing the Activity in Discord
 
-Open the test channel:
+Open the isolated test channel:
 https://discord.com/channels/818423564901416991/1558470955930755162
 
-Run these as a test-server owner or member with Manage Server permissions:
+Run these as the test-server owner or a member with Manage Server permission:
 
-1. **/activitytest invite** posts a test invitation ONLY to the test channel.
-2. Press **Open availability planner in Discord**. This sends Discord's native
-   LAUNCH_ACTIVITY interaction, not a web navigation link.
-3. Fill the test dates, multiple availability windows, per-window caps and
-   whole-day maximum stay; edits save automatically to the isolated test store.
-4. Close the Activity and reopen it to confirm persistence.
-5. Once someone has submitted at least two feasible options, run
-   **/activitytest vote**. WinterBot posts a NEW voting message, not an edit
-   to the invitation; members can open the same Activity and vote.
-6. **/activitytest reset** resets ONLY isolated Activity sample data.
-   No real community rounds or events are affected.
+1. Run **/activitytest invite**. This posts a fresh invitation only to the test channel.
+2. Click **Open availability planner in Discord**. This launches the embedded Activity,
+   NOT a browser link. The new prototype opens a familiar seven-day calendar.
+3. Click a day card. Try **Available hours**, **All day**, **Unavailable**, and the
+   confirmed/tentative choice on each time range. Try extra ranges and duration limits.
+   Editing responds locally; the saved-draft indicator reflects remote persistence.
+4. Turn on **Select multiple days**, pick several days, configure common hours, and
+   apply. Existing answers get an overwrite preview before replacement.
+5. Use **Copy this day** to copy all its windows to chosen dates.
+6. Choose **Review week**. The final submission is disabled until all seven dates
+   are answered and the latest changes have saved. Submit explicitly.
+7. Save your submitted answers as your usual week. Run **/activitytest next-week** to
+   start another seven-day round while preserving templates, relaunch and choose
+   **Reuse usual week**. Review and correct exceptions before submitting again.
+8. Close/reopen the Activity to verify persistence.
+9. **/activitytest reset** removes ONLY the isolated Activity test round AND usual-week
+   templates. It does not modify real community events, roles, or invitations.
+
+The older test-server **/activitytest vote** backend exists for legacy algorithm
+verification, but voting is NOT connected to this focused weekly-calendar UX pilot.
+Do not use it as an end-to-end test of the new Activity's voting interface.
+
+### UX prototype implementation
+
+- Seven-day, locally responsive Activity UI with desktop/mobile layouts.
+- Private test-only data file: scheduling-activity-weekly-ux.json; production
+  scheduling.json and the legacy Activity test state remain untouched.
+- Confirmed and tentative ranges, five-minute precision, optional duration limits,
+  copy-day, multi-day editing, usual-week template, required review, explicit submit.
+- Controls remain usable while changes save in the background. Save failures show a
+  retry option. A saved draft does not count as a confirmed submission.
+- No real event check-in, Discord role/channel changes, organizer controls or
+  Scheduled Event publishing in this prototype. Those remain later milestones.
 
 The Activity verifies the logged-in Discord user through OAuth and confirms
 membership and View Channel access on the test server.

@@ -12,6 +12,7 @@ const {
   PermissionFlagsBits, SlashCommandBuilder, MessageFlags, ApplicationFlags,
 } = require('discord.js');
 const { SchedulingStore } = require('./store');
+const { createActivityWeeklyUx } = require('./activityWeeklyUx');
 const {
   createRound, listDays, enroll, setDays, advance, closeCollection,
   calculateCandidates, startVote, castVote,
@@ -65,7 +66,7 @@ function same(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 function createActivityTest({ client, clientId, clientSecret, sessionSecret,
-  dataFile, fetchImpl = globalThis.fetch, now = () => new Date() }) {
+  dataFile, weeklyDataFile, fetchImpl = globalThis.fetch, now = () => new Date() }) {
   assert(client && typeof client.guilds?.fetch === 'function', 'Discord bot client is required.');
   assert(/^\d{15,22}$/.test(String(clientId || '')), 'A valid Discord application ID is required.');
   assert(clientSecret && typeof clientSecret === 'string', 'Discord client secret is required.');
@@ -74,6 +75,8 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
   const origin = 'https://' + clientId + '.discordsays.com';
   const store = new SchedulingStore(dataFile || path.join(process.cwd(), 'scheduling-activity-test.json'));
   store.initialize();
+  const weeklyUx=createActivityWeeklyUx({dataFile:weeklyDataFile||
+    (dataFile ? dataFile+'.weekly-ux.json' : path.join(process.cwd(),'scheduling-activity-weekly-ux.json')),now});
   let initialized = false;
 
   const sign = data => crypto.createHmac('sha256', sessionSecret).update(data).digest('base64url');
@@ -216,6 +219,16 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
         res.setHeader('Set-Cookie', cookieHeader(user));
         return send(res, 200, { access_token: tokens.access_token });
       }
+      if (req.method === 'GET' && pathName === '/activity/api/ux/state') {
+        const user=await requireUser(req);
+        return send(res,200,{user,...await weeklyUx.read(user.id)});
+      }
+      if (req.method === 'POST' && /^\/activity\/api\/ux\/[a-z-]+$/.test(pathName)) {
+        writeAllowed(req);
+        const user=await requireUser(req);
+        const body=await jsonBody(req);
+        return send(res,200,await weeklyUx.mutate(user.id,pathName.split('/').at(-1),body));
+      }
       if (req.method === 'GET' && pathName === '/activity/api/state') {
         const user = await requireUser(req);
         const round = await ensureRound();
@@ -267,7 +280,8 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       .addSubcommand(x => x.setName('invite').setDescription('Post a private-server Activity test invitation'))
       .addSubcommand(x => x.setName('status').setDescription('Check whether Discord has enabled the test Activity'))
       .addSubcommand(x => x.setName('vote').setDescription('Close test availability and open a test ballot'))
-      .addSubcommand(x => x.setName('reset').setDescription('Reset isolated Activity test data'));
+      .addSubcommand(x => x.setName('reset').setDescription('Reset isolated Activity test data'))
+      .addSubcommand(x => x.setName('next-week').setDescription('Start the next test week, keeping personal templates'));
   }
   function launchButton() {
     return new ActionRowBuilder().addComponents(new ButtonBuilder()
@@ -340,9 +354,16 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
       }
       if (option === 'reset') {
         await store.transaction(data => { data.rounds = []; });
+        await weeklyUx.reset();
         await ensureRound();
         await interaction.reply({ content: 'Isolated Activity test data reset. No main-server data changed.',
           flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if(option === 'next-week') {
+        const week=await weeklyUx.advanceWeek();
+        await interaction.reply({content:'Started the next test week: '+week.dates[0]+' to '+week.dates.at(-1)+
+          '. Your saved usual-week templates remain available.',flags:MessageFlags.Ephemeral});
         return;
       }
       const round = await ensureRound();
@@ -350,14 +371,16 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const channel = await client.channels.fetch(CHANNEL_ID);
         assert(channel?.guildId === GUILD_ID, 'Test channel is not accessible.', 503);
+        const weekly=await weeklyUx.read(interaction.user.id);
         const msg = await channel.send({
-          embeds: [new EmbedBuilder().setColor(0x859df3).setTitle('WinterBot · Discord Activity test')
-            .setDescription('Test the member availability planner **inside Discord**. ' +
-              'All responses are isolated from the main Crashday server and no real events are created.')
+          embeds: [new EmbedBuilder().setColor(0x859df3).setTitle('WinterBot · Weekly calendar Activity test')
+            .setDescription('Try the familiar weekly calendar **inside Discord**: ' +
+              'select days, set confirmed/tentative hours, reuse your usual week and review before submitting. ' +
+              'All drafts are isolated from the Crashday community. No events or roles are created.')
             .addFields(
-              { name: 'Possible dates', value: listDays(round).join('\n') },
-              { name: 'Status', value: round.phase === 'voting' ? 'Test ballot open' : 'Test availability open' },
-            ).setFooter({ text: 'WinterBot Activity · test server only' })],
+              { name: 'Test week', value: weekly.round.dates.join('\n') },
+              { name: 'Status', value: 'Availability UX prototype · test server only' },
+            ).setFooter({ text: 'WinterBot Activity · isolated test server' })],
           components: [launchButton()],
           allowedMentions: { parse: [] },
         });
@@ -407,6 +430,7 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
     assert(channel?.guildId === GUILD_ID && channel.isTextBased?.(),
       'WinterBot cannot access the isolated test channel.', 503);
     await ensureRound();
+    await weeklyUx.read('000000000000000001');
     await guild.commands.create(command().toJSON());
     client.on('interactionCreate', onInteraction);
     initialized = true;
@@ -416,7 +440,7 @@ function createActivityTest({ client, clientId, clientSecret, sessionSecret,
     initialized = false;
   }
   return {
-    handle, start, stop, store, ensureRound, publicRound, onInteraction,
+    handle, start, stop, store, weeklyUx, ensureRound, publicRound, onInteraction,
     get testIds() { return {guildId:GUILD_ID,channelId:CHANNEL_ID}; },
     get origin() { return origin; },
   };
